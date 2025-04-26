@@ -63,6 +63,11 @@ load_email_data <- function() {
   return(kontaktdaten) 
 }
 
+# E-MAIL KONTAKTE SPEICHERN 
+save_email_data <- function(kontaktdaten) {
+  # Speichert die übergebenen Daten in der Datei "Emails.RData"
+  save(kontaktdaten, file = "EMails.RData")
+}
 
 # Funktion zum Abrufen der CSV-Dateien aus dem festen Ordner
 get_csv_files <- function(directory = "data") {
@@ -91,27 +96,77 @@ extract_msb_type <- function(file_names) {
   return(msb_types[!is.na(msb_types)]) 
 }
 
+
+new_entry_modal <- function(title) {
+  modalDialog(
+    title = "Neuen Eintrag hinzufügen",
+    textInput("new_msb", "MSB Name"),
+    textInput("new_email", "E-Mail Adresse"),
+    textInput("new_anrede", "Anrede", value = "Sehr geehrte Damen und Herren,"),
+    textAreaInput("new_einleitung", "Einleitungssatz", value = "Bitte finden Sie die angeforderten Daten unten:"),
+    footer = tagList(
+      modalButton("Abbrechen"),
+      actionButton("save_new_entry", "Speichern", class = "btn-primary")
+    ),
+    easyClose = TRUE
+  )
+}
+
+
+edit_entry_modal <- function(selected_data) {
+  modalDialog(
+    title = "Eintrag bearbeiten",
+    textInput("edit_msb", "MSB Name", value = selected_data$MSB),
+    textInput("edit_email", "E-Mail Adresse", value = selected_data$EMAIL),
+    textInput("edit_anrede", "Anrede", value = selected_data$ANREDE),
+    textAreaInput("edit_einleitung", "Einleitungssatz", value = selected_data$EINLEITUNG),
+    footer = tagList(
+      modalButton("Abbrechen"),
+      actionButton("save_edit_entry", "Speichern", class = "btn-primary")
+    ),
+    easyClose = TRUE
+  )
+}
+
+show_success_toast <- function(message) {
+  show_toast(
+    title = message,
+    text = NULL,
+    type = "success",
+    timer = 3000,
+    timerProgressBar = TRUE,
+    position = "top-end",
+    width = NULL,
+    session = shiny::getDefaultReactiveDomain()
+  )
+}
+
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # ----                         USER INTERFACE                               ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # UI-Definition mit bs4Dash
 ui <- bs4DashPage(
+  ## Browser Titel ----
   title = "LG-NACHFORDERUNG",
+  
+  ## Navbar ----
   header = bs4DashNavbar(),
   
-  sidebar = bs4DashSidebar(disable = TRUE),  # Sidebar deaktiviert
-  controlbar = bs4DashControlbar(),
-  
+  # Sidebar deaktiviert
+  sidebar = bs4DashSidebar(disable = TRUE),  
+ 
+  ## Body ----
   body = bs4DashBody(
     includeCSS(file.path(getwd(), "www/styles.css")),
     includeScript(file.path(getwd(), "www/custom.js")),
     
     tabsetPanel(
+      ### Tab Hauptbereich ----
       tabPanel(
         "Hauptbereich",
         fluidRow(
           
-          # Linke Seite: Filter + Plot in einer einzigen Box
+          #### Filter ----
           column(
             width = 3,
             class = "messstellenbetreiber-box-parent",
@@ -119,6 +174,7 @@ ui <- bs4DashPage(
               title = "MESSSTELLENBETREIBER",
               width = 12,
               style = "font-family: monospace;",
+              collapsible = FALSE,
 
               # Erste Zeile: ALLE-Button und Dropdown nebeneinander
               fluidRow(
@@ -148,31 +204,47 @@ ui <- bs4DashPage(
               # Abstand
               br(),
               
-              # Dynamischer Plot
+              #### Plot ----
               uiOutput("plot_ui")
             )
           ),
           
-          # Rechte Seite: Tabelle mit CSV-Dateien
+          #### Anzeige ----
           column(
             width = 9,
             box(
               title = "CSV-Dateien",
               DTOutput("file_list"),
-              width = 12
+              width = 12,
+              collapsible = FALSE
             )
           )
           
         )
       ),
       
+      ### Tab E-Mails ----
       tabPanel(
         "E-Mails",
         fluidRow(
           box(
             title = "E-Mail-Details",
-            textOutput("email_preview"),
-            width = 12
+            width = 12,
+            collapsible = FALSE,
+            
+            # Neue Zeile: Buttons
+            fluidRow(
+              column(
+                width = 12,
+                style = "margin-bottom: 10px;", # Kleiner Abstand unter Buttons
+                actionButton("add_entry", "Neuer Eintrag", class = "btn-primary"),
+                actionButton("edit_entry", "Eintrag bearbeiten", class = "btn-primary"),
+                actionButton("delete_entry", "Eintrag löschen", class = "btn-primary")
+              )
+            ),
+            
+            # Danach die Tabelle
+            DTOutput("email_table")
           )
         )
       )
@@ -340,10 +412,129 @@ server <- function(input, output, session) {
 
   })
   
-
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                            E-MAIL                                  ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  output$email_table <- renderDT({
+    req(kontaktdaten())  # Sicherstellen, dass Daten geladen sind
+    
+    datatable(
+      kontaktdaten(),
+      selection = "single",
+      options = list(
+        paging = FALSE,         
+        searching = FALSE,       
+        ordering = TRUE,        
+        autoWidth = TRUE,       
+        dom = 't' 
+      ),
+      rownames = FALSE 
+    )
+  })
+  
+  
+  observeEvent(input$add_entry, {
+    showModal(new_entry_modal())
+  })
+  
+  
+  observeEvent(input$save_new_entry, {
+    # 1. Aktuelle Daten holen
+    data <- kontaktdaten()
+    
+    # 2. Neue Zeile bauen
+    new_row <- tibble(
+      MSB = input$new_msb,
+      EMAIL = input$new_email,
+      ANREDE = input$new_anrede,
+      EINLEITUNG = input$new_einleitung
+    )
+    
+    # 3. Neue Zeile unten anfügen
+    updated_data <- bind_rows(data, new_row)
+    
+    # 4. Reactive Value aktualisieren
+    kontaktdaten(updated_data)
+    
+    # 5. In die Datei speichern
+    save_email_data(kontaktdaten())
+    
+    # 6. Modal schließen
+    removeModal()
+    show_success_toast("Neuer Eintrag erfolgreich gespeichert!")
+  })
   
   
   
+  observeEvent(input$delete_entry, {
+    # Holen der ausgewählten Zeile
+    selected_row <- input$email_table_rows_selected
+    
+    if (length(selected_row) == 0) {
+      showModal(modalDialog(
+        title = "Hinweis",
+        "Bitte wähle zuerst einen Eintrag aus, den du löschen möchtest.",
+        easyClose = TRUE
+      ))
+    } else {
+      # Aktuelle Daten
+      data <- kontaktdaten()
+      
+      # Löschen der ausgewählten Zeile
+      updated_data <- data[-selected_row, ]
+      
+      # Update reactive Value
+      kontaktdaten(updated_data)
+      
+      # Speicherung
+      save_email_data(kontaktdaten())
+      
+      show_success_toast("Eintrag erfolgreich gelöscht!")
+    }
+  })
+  
+  observeEvent(input$edit_entry, {
+    selected_row <- input$email_table_rows_selected
+    
+    if (length(selected_row) == 0) {
+      showModal(modalDialog(
+        title = "Hinweis",
+        "Bitte wähle zuerst einen Eintrag aus, den du bearbeiten möchtest.",
+        easyClose = TRUE
+      ))
+    } else {
+      # Aktuellen Datensatz holen
+      data <- kontaktdaten()
+      selected_data <- data[selected_row, ]
+      
+      # Modal öffnen und vorausfüllen
+      showModal(edit_entry_modal(selected_data))
+    }
+  })
+  
+  observeEvent(input$save_edit_entry, {
+    selected_row <- input$email_table_rows_selected
+    data <- kontaktdaten()
+    
+    # Überschreibe die ausgewählte Zeile mit neuen Werten
+    data[selected_row, ] <- tibble(
+      MSB = input$edit_msb,
+      EMAIL = input$edit_email,
+      ANREDE = input$edit_anrede,
+      EINLEITUNG = input$edit_einleitung
+    )
+    
+    # Aktualisiere reactiveVal
+    kontaktdaten(data)
+    
+    # Speichern in RData
+    save_email_data(kontaktdaten())
+    
+    # Modal schließen
+    removeModal()
+    show_success_toast("Eintrag erfolgreich aktualisiert!")
+  })
   
 
   # Wenn die Sitzung endet, beende die App  
