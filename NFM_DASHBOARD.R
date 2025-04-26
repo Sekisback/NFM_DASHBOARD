@@ -148,11 +148,8 @@ ui <- bs4DashPage(
               # Abstand
               br(),
               
-              # ggplot
-              div(
-                style = "border: 1px solid #ccc; padding: 10px;",
-                plotOutput("plot_msb", height = "450px")
-              )
+              # Dynamischer Plot
+              uiOutput("plot_ui")
             )
           ),
           
@@ -194,6 +191,21 @@ server <- function(input, output, session) {
   # CSV-Liste einlesen ----
   csv_files <- reactiveVal(get_csv_files())
   
+  # Reaktive gefilterte Dateien je nach MSB-Type
+  filtered_files <- reactive({
+    req(csv_files())  # Stelle sicher, dass CSV-Dateien vorhanden sind
+    
+    # Alle aktuellen Dateien
+    files <- csv_files()
+    
+    # Filter anwenden je nach RadioButton-Auswahl
+    if (input$msb_type == "alle") {
+      files
+    } else {
+      files[str_detect(basename(files), fixed(input$msb_type))]
+    }
+  })
+  
   
   # MSB extrahieren ----
   observe({
@@ -220,20 +232,7 @@ server <- function(input, output, session) {
   })
   
 
-  # Reaktive gefilterte Dateien je nach MSB-Type
-  filtered_files <- reactive({
-    req(csv_files())  # Stelle sicher, dass CSV-Dateien vorhanden sind
-    
-    # Alle aktuellen Dateien
-    files <- csv_files()
-    
-    # Filter anwenden je nach RadioButton-Auswahl
-    if (input$msb_type == "alle") {
-      files
-    } else {
-      files[str_detect(basename(files), fixed(input$msb_type))]
-    }
-  })
+  
   
   
   
@@ -271,6 +270,23 @@ server <- function(input, output, session) {
   })
   
   
+  
+  # Plot dynamische Höhe berechnen
+  plot_height <- reactive({
+    req(filtered_files())
+    file_names <- basename(filtered_files())
+    msb_names <- extract_msb_name(file_names)
+    max(75, length(msb_names) * 12)   # Mindestens 300px, sonst 50px pro MSB
+  })
+  
+  # Dynamisches UI für Plot
+  output$plot_ui <- renderUI({
+    div(
+      style = "border: 1px solid #ccc; padding: 10px; background-color: white;",
+      plotOutput("plot_msb", height = paste0(plot_height(), "px"))
+    )
+  })
+  
   output$plot_msb <- renderPlot({
     req(filtered_files())
     
@@ -283,6 +299,9 @@ server <- function(input, output, session) {
     # Erzeuge Tabelle: Anzahl Dateien pro MSB
     msb_count <- tibble(msb = msb_names) %>%
       count(msb, sort = TRUE)
+    
+    # HIER: Maximalwert berechnen VOR ggplot!
+    max_value <- max(msb_count$n, na.rm = TRUE)
     
     # Plot erstellen
     ggplot(msb_count, aes(x = n, y = reorder(msb, n))) +
@@ -312,7 +331,12 @@ server <- function(input, output, session) {
       theme(
         panel.grid.major = element_blank(),
       )+
-      scale_y_discrete(labels = NULL)
+      scale_y_discrete(labels = NULL)+
+      scale_x_continuous(
+        limits = c(0, ifelse(max_value < 10, 10, NA)),
+        breaks = 0:max(10, max_value),
+        expand = expansion(mult = c(0, 0.05))
+      )
 
   })
   
