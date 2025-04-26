@@ -1,0 +1,27 @@
+/* Versteckt das Pushmenu-Icon */
+.navbar-nav .nav-item .nav-link[data-widget='pushmenu'] {
+  display: none !important;
+}
+
+
+/* Stelle sicher, dass die Navbar-Höhe stabil bleibt */
+.main-header .navbar {
+    height: 50px !important; /* Standard-Höhe erzwingen */
+    display: flex !important;
+    align-items: center !important; /* Vertikale Zentrierung */
+}
+
+
+/* Padding in der äußeren col-sm-12 innerhalb der linken Spalte reduzieren */
+.messstellenbetreiber-box-parent {
+  padding-left: 1px !important;
+}
+
+/* Radiobutton-Gruppe: Margin-Top zurücksetzen */
+/* Radiobutton-Labels leicht schöner machen */
+.shiny-options-group {
+  margin-top: 0px !important;
+  line-height: 1.5;
+  padding-bottom: 2px;
+  font-size: 0.9rem;
+}
