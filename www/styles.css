@@ -1,8 +1,27 @@
+/* Container für die Tabelle erstellen */
+body, .content-wrapper {
+  /* Scrollen der Seite verhindern */
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* Containerhöhe für Tabelle festlegen */
+#table-container {
+  height: calc(100vh - 100px); 
+}
+
+/* Erzwingt, dass die Tabelle linksbündig bleibt */
+.dataTables_wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  margin-left: 0 !important; 
+}
+
+
 /* Versteckt das Pushmenu-Icon */
 .navbar-nav .nav-item .nav-link[data-widget='pushmenu'] {
   display: none !important;
 }
-
 
 /* Stelle sicher, dass die Navbar-Höhe stabil bleibt */
 .main-header .navbar {
@@ -25,3 +44,4 @@
   padding-bottom: 2px;
   font-size: 0.9rem;
 }
+

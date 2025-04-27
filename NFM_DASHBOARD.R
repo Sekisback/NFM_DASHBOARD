@@ -57,19 +57,20 @@ options(tidiverse.quiet = TRUE)
 # ----                           FUNKTIONEN                                 ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 
-# Funktion zum Laden der RData-Datei mit den Einstellungen
+# Laden der RData-Datei mit den E-Mail Kontakten
 load_email_data <- function() {
   load("EMails.RData") 
   return(kontaktdaten) 
 }
 
-# E-MAIL KONTAKTE SPEICHERN 
+# Speichern der RData-Datei mit den E-Mail Kontakten nach Änderung
 save_email_data <- function(kontaktdaten) {
-  # Speichert die übergebenen Daten in der Datei "Emails.RData"
   save(kontaktdaten, file = "EMails.RData")
 }
 
-# Funktion zum Abrufen der CSV-Dateien aus dem festen Ordner
+
+# Abrufen der CSV-Dateien aus dem Ordner
+# TODO Ordner auf Laufwerk mappen
 get_csv_files <- function(directory = "data") {
   # Hole alle CSV-Dateien im Ordner
   files <- list.files(directory, pattern = "\\.csv$", full.names = TRUE)
@@ -79,7 +80,7 @@ get_csv_files <- function(directory = "data") {
 }
 
 
-# Funktion zum Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
+# Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
 extract_msb_name <- function(file_names) {
   # Verwende regex, um den Text zwischen "MSB" und "an" zu extrahieren
   msb_names <- str_extract(file_names, "(?<=MSB\\s)(.*?)(?=\\san)")
@@ -87,8 +88,7 @@ extract_msb_name <- function(file_names) {
   return(msb_names[!is.na(msb_names)])  
 }
 
-
-# Funktion zum Extrahieren des MSB-Typs (wMSB oder gMSB) aus den Dateinamen
+# Extrahieren des MSB-Typs (wMSB oder gMSB) aus den Dateinamen
 extract_msb_type <- function(file_names) {
   # Verwende regex, um nach 'wMSB' oder 'gMSB' zu suchen
   msb_types <- str_extract(file_names, "(wMSB|gMSB)")
@@ -97,43 +97,111 @@ extract_msb_type <- function(file_names) {
 }
 
 
-new_entry_modal <- function(title) {
+# Erstelle Plot als Balkendiagramm mit der Menge der Dateien pro MSB
+msb_plot <- function(file_names) {
+  # MSB-Namen extrahieren
+  msb_names <- extract_msb_name(basename(file_names))
+  
+  # Zähle Vorkommen
+  msb_count <- tibble(msb = msb_names) %>%
+    count(msb, sort = TRUE)
+  
+  # Maximalwert für die X-Achse
+  max_value <- max(msb_count$n, na.rm = TRUE)
+  
+  # Plot erzeugen
+  ggplot(msb_count, aes(x = n, y = reorder(msb, n))) +
+    geom_col(fill = "steelblue", width = 0.4, just = 1) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      data = msb_count,
+      mapping = aes(
+        x = 0,
+        y = msb,
+        label = str_to_title(msb)
+      ),
+      hjust = 0,
+      vjust = 0,
+      nudge_y = 0.2,
+      nudge_x = 0.1,
+      color = "black",
+      fontface = "bold",
+      size = 4
+    )+
+    theme_minimal(base_family = "Arial") +
+    labs(
+      x = element_blank(),
+      y = element_blank(),
+      title = element_blank(),
+    ) +
+    theme(
+      panel.grid.major = element_blank(),
+    )+
+    scale_y_discrete(labels = NULL)+
+    scale_x_continuous(
+      limits = c(0, ifelse(max_value < 10, 10, NA)),
+      breaks = 0:max(10, max_value),
+      expand = expansion(mult = c(0, 0.05))
+    )
+}
+
+
+# Modal für Neu- und Edit-Einträge
+entry_modal <- function(mode = c("new", "edit"), data = NULL) {
+  mode <- match.arg(mode)
+  # Titel je nach Mode
+  dlg_title <- if (mode == "new") {
+    "Neuen Eintrag hinzufügen"
+  } else {
+    "Eintrag bearbeiten"
+  }
+  # Default Einleitung
+  default_einleitung <- "für die in der Tabelle aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS, noch keine vollständigen Lastgangdaten empfangen.<br>
+Wir möchten Sie daher bitten, diese schnellstmöglich in der aktuellen MSCONS Version an die Ihnen bekannte edifact Adresse zu senden."
+  # Defautl Anrede
+  default_anrede <- "Sehr geehrte Damen und Herren,"
+  
+  # Default-Werte oder aus data übernehmen
+  vals <- list(
+    msb        = if (mode == "edit") data$MSB        else "",
+    email      = if (mode == "edit") data$EMAIL      else "",
+    anrede     = if (mode == "edit") data$ANREDE     else default_anrede,
+    einleitung = if (mode == "edit") data$EINLEITUNG else default_einleitung
+  )
+  # Welcher Save-Button soll erzeugt werden?
+  save_id <- if (mode == "new") "save_new_entry" else "save_edit_entry"
+  
   modalDialog(
-    title = "Neuen Eintrag hinzufügen",
-    textInput("new_msb", "MSB Name"),
-    textInput("new_email", "E-Mail Adresse"),
-    textInput("new_anrede", "Anrede", value = "Sehr geehrte Damen und Herren,"),
-    textAreaInput("new_einleitung", "Einleitungssatz", value = "Bitte finden Sie die angeforderten Daten unten:"),
+    size = "xl",
+    title = dlg_title,
+    fluidRow(
+      column(4, textInput("modal_msb", "MSB Name", value = vals$msb)),
+      column(4, textInput("modal_email", "E-Mail Adresse", value = vals$email)),
+      column(4, textInput("modal_anrede", "Anrede", value = vals$anrede))
+    ),
+    textAreaInput(
+      "modal_einleitung", 
+      "Einleitungssatz", 
+      value = vals$einleitung, 
+      width = "100%",     # Breite setzen
+      rows = 3             # Mindestens 4 Zeilen hoch
+    ),
     footer = tagList(
       modalButton("Abbrechen"),
-      actionButton("save_new_entry", "Speichern", class = "btn-primary")
+      actionButton(save_id, "Speichern", class = "btn-primary")
     ),
-    easyClose = TRUE
+    easyClose = TRUE,
   )
 }
 
 
-edit_entry_modal <- function(selected_data) {
-  modalDialog(
-    title = "Eintrag bearbeiten",
-    textInput("edit_msb", "MSB Name", value = selected_data$MSB),
-    textInput("edit_email", "E-Mail Adresse", value = selected_data$EMAIL),
-    textInput("edit_anrede", "Anrede", value = selected_data$ANREDE),
-    textAreaInput("edit_einleitung", "Einleitungssatz", value = selected_data$EINLEITUNG),
-    footer = tagList(
-      modalButton("Abbrechen"),
-      actionButton("save_edit_entry", "Speichern", class = "btn-primary")
-    ),
-    easyClose = TRUE
-  )
-}
-
+# Erfolgsmeldung oben rechts
 show_success_toast <- function(message) {
   show_toast(
     title = message,
     text = NULL,
     type = "success",
-    timer = 3000,
+    timer = 1500,
     timerProgressBar = TRUE,
     position = "top-end",
     width = NULL,
@@ -263,7 +331,12 @@ server <- function(input, output, session) {
   # CSV-Liste einlesen ----
   csv_files <- reactiveVal(get_csv_files())
   
-  # Reaktive gefilterte Dateien je nach MSB-Type
+  
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                            FILTER                                  ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  ## MSB Typ ---- 
   filtered_files <- reactive({
     req(csv_files())  # Stelle sicher, dass CSV-Dateien vorhanden sind
     
@@ -278,8 +351,19 @@ server <- function(input, output, session) {
     }
   })
   
+  ## MSB Typ Überwachung ----
+  observeEvent(input$msb_type, {
+    # Bei Änderung des MSB Typ Filter MSB Name auf Alle setzen
+    updateSelectInput(
+      session,
+      "file_filter",
+      # Leere Auswahl entspricht "Alle"
+      selected = ""  
+    )
+  })
   
-  # MSB extrahieren ----
+  
+  ## MSB Name extrahieren ----
   observe({
     # Hole die CSV-Dateinamen aus dem Ordner (ohne den Pfad)
     file_names <- basename(csv_files())
@@ -294,35 +378,56 @@ server <- function(input, output, session) {
     updateSelectInput(session, "file_filter", choices = c("Alle" = "", unique(msb_names)))
   })
   
-  # Wenn MSB-Type gewechselt wird, Dropdown zurücksetzen
-  observeEvent(input$msb_type, {
+
+  ## MSB Name dynamisch Liste ----
+  filtered_msb_names <- reactive({
+    # Extrahiert die Dateinamen aus dem reaktiven Ausdruck filtered_files()
+    file_names <- basename(filtered_files())
+    # Wendet die Funktion extract_msb_name auf die Dateinamen an
+    extract_msb_name(file_names)
+  })
+  
+  ## MSB Name Filter Überwachung ----
+  observe({
+    # Aktualisiert das selectInput-Feld mit der ID "file_filter"
     updateSelectInput(
       session,
       "file_filter",
-      selected = ""  # Leere Auswahl entspricht "Alle"
+      # Definiert die Auswahlmöglichkeiten für das Dropdown-Menü
+      choices = c("Alle" = "", unique(filtered_msb_names()))
     )
+  })
+
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                             PLOT                                   ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  ## Plot dynamische Höhe berechnen ----
+  plot_height <- reactive({
+    req(filtered_files())
+    file_names <- basename(filtered_files())
+    msb_names <- extract_msb_name(file_names)
+    # Mindestens 75px, sonst 12px pro MSB
+    max(75, length(msb_names) * 12)   
+  })
+  
+  ## Plot Dynamisches UI ----
+  output$plot_ui <- renderUI({
+    div(
+      style = "border: 1px solid #ccc; padding: 10px; background-color: white;",
+      plotOutput("plot_msb", height = paste0(plot_height(), "px"))
+    )
+  })
+  
+  output$plot_msb <- renderPlot({
+    req(filtered_files())
+    # Einfach die Funktion aufrufen
+    msb_plot(filtered_files())
   })
   
 
   
-  
-  
-  
-  filtered_msb_names <- reactive({
-    file_names <- basename(filtered_files())
-    extract_msb_name(file_names)
-  })
-  
-  observe({
-    updateSelectInput(
-      session,
-      "file_filter",
-      choices = c("Alle" = "", unique(filtered_msb_names()))
-    )
-  })
-  
-  
-  
+  ## TABELLE *******************************************************************
   output$file_list <- renderDT({
     req(filtered_files())
     
@@ -341,132 +446,91 @@ server <- function(input, output, session) {
     )
   })
   
-  
-  
-  # Plot dynamische Höhe berechnen
-  plot_height <- reactive({
-    req(filtered_files())
-    file_names <- basename(filtered_files())
-    msb_names <- extract_msb_name(file_names)
-    max(75, length(msb_names) * 12)   # Mindestens 300px, sonst 50px pro MSB
-  })
-  
-  # Dynamisches UI für Plot
-  output$plot_ui <- renderUI({
-    div(
-      style = "border: 1px solid #ccc; padding: 10px; background-color: white;",
-      plotOutput("plot_msb", height = paste0(plot_height(), "px"))
-    )
-  })
-  
-  output$plot_msb <- renderPlot({
-    req(filtered_files())
-    
-    # Hole Dateinamen
-    file_names <- basename(filtered_files())
-    
-    # Extrahiere MSB-Namen
-    msb_names <- extract_msb_name(file_names)
-    
-    # Erzeuge Tabelle: Anzahl Dateien pro MSB
-    msb_count <- tibble(msb = msb_names) %>%
-      count(msb, sort = TRUE)
-    
-    # HIER: Maximalwert berechnen VOR ggplot!
-    max_value <- max(msb_count$n, na.rm = TRUE)
-    
-    # Plot erstellen
-    ggplot(msb_count, aes(x = n, y = reorder(msb, n))) +
-      geom_col(fill = "steelblue", width = 0.4, just = 1) +
-      geom_vline(xintercept = 0) +
-      geom_text(
-        data = msb_count,
-        mapping = aes(
-          x = 0,
-          y = msb,
-          label = str_to_title(msb)
-        ),
-        hjust = 0,
-        vjust = 0,
-        nudge_y = 0.2,
-        nudge_x = 0.1,
-        color = "black",
-        fontface = "bold",
-        size = 4
-      )+
-      theme_minimal(base_family = "Arial") +
-      labs(
-        x = element_blank(),
-        y = element_blank(),
-        title = element_blank(),
-      ) +
-      theme(
-        panel.grid.major = element_blank(),
-      )+
-      scale_y_discrete(labels = NULL)+
-      scale_x_continuous(
-        limits = c(0, ifelse(max_value < 10, 10, NA)),
-        breaks = 0:max(10, max_value),
-        expand = expansion(mult = c(0, 0.05))
-      )
-
-  })
-  
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                            E-MAIL                                  ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
+  ## E-Mail Tabelle ----
   output$email_table <- renderDT({
     req(kontaktdaten())  # Sicherstellen, dass Daten geladen sind
     
     datatable(
       kontaktdaten(),
+      #escape = FALSE,
       selection = "single",
       options = list(
-        paging = FALSE,         
-        searching = FALSE,       
-        ordering = TRUE,        
-        autoWidth = TRUE,       
-        dom = 't' 
+        # Deaktiviert horizontales Scrollen
+        scrollX = FALSE,
+        # Setzt die Höhe der Tabelle dynamisch basierend auf der Fensterhöhe
+        scrollY = "calc(100vh - 300px)",
+        # Zeigt alle Einträge auf einer Seite an
+        pageLength = -1,
+        # Zeigt nur die Tabelle selbst an (keine Suchfelder etc.)
+        dom = 't',
+        # Spaltenbreite festlegen
+        autoWidth = FALSE, 
+        columnDefs = list(
+          list(width = '15%', targets = 0), # MSB
+          list(width = '15%', targets = 1), # EMAIL
+          list(width = '20%', targets = 2), # ANREDE
+          list(width = '50%', targets = 3)  # EINLEITUNG
+          #list(className = 'dt-body-wrap', targets = 3)
+        )
       ),
       rownames = FALSE 
     )
   })
   
-  
+  ## E-Mail neu ----
   observeEvent(input$add_entry, {
-    showModal(new_entry_modal())
+    showModal(entry_modal("new"))
   })
   
-  
+  ## E-Mail neu speichern ----
   observeEvent(input$save_new_entry, {
-    # 1. Aktuelle Daten holen
     data <- kontaktdaten()
-    
-    # 2. Neue Zeile bauen
     new_row <- tibble(
-      MSB = input$new_msb,
-      EMAIL = input$new_email,
-      ANREDE = input$new_anrede,
-      EINLEITUNG = input$new_einleitung
+      MSB        = input$modal_msb,
+      EMAIL      = input$modal_email,
+      ANREDE     = input$modal_anrede,
+      EINLEITUNG = input$modal_einleitung
     )
-    
-    # 3. Neue Zeile unten anfügen
-    updated_data <- bind_rows(data, new_row)
-    
-    # 4. Reactive Value aktualisieren
-    kontaktdaten(updated_data)
-    
-    # 5. In die Datei speichern
+    updated <- bind_rows(data, new_row)
+    kontaktdaten(updated)
     save_email_data(kontaktdaten())
-    
-    # 6. Modal schließen
     removeModal()
     show_success_toast("Neuer Eintrag erfolgreich gespeichert!")
   })
   
   
+  ## E-Mail bearbeiten ----
+  observeEvent(input$edit_entry, {
+    sel <- input$email_table_rows_selected
+    if (length(sel) == 0) {
+      showModal(modalDialog("Bitte erst einen Eintrag auswählen.", easyClose = TRUE))
+    } else {
+      dat <- kontaktdaten()[sel, ]
+      showModal(entry_modal("edit", dat))
+    }
+  })
   
+  ## E-Mail bearbeiten speichern ----
+  observeEvent(input$save_edit_entry, {
+    sel <- input$email_table_rows_selected
+    data <- kontaktdaten()
+    data[sel, ] <- tibble(
+      MSB        = input$modal_msb,
+      EMAIL      = input$modal_email,
+      ANREDE     = input$modal_anrede,
+      EINLEITUNG = input$modal_einleitung
+    )
+    kontaktdaten(data)
+    save_email_data(kontaktdaten())
+    removeModal()
+    show_success_toast("Eintrag erfolgreich aktualisiert!")
+  })
+  
+  ## E-Mail löschen ----
   observeEvent(input$delete_entry, {
     # Holen der ausgewählten Zeile
     selected_row <- input$email_table_rows_selected
@@ -494,47 +558,13 @@ server <- function(input, output, session) {
     }
   })
   
-  observeEvent(input$edit_entry, {
-    selected_row <- input$email_table_rows_selected
-    
-    if (length(selected_row) == 0) {
-      showModal(modalDialog(
-        title = "Hinweis",
-        "Bitte wähle zuerst einen Eintrag aus, den du bearbeiten möchtest.",
-        easyClose = TRUE
-      ))
-    } else {
-      # Aktuellen Datensatz holen
-      data <- kontaktdaten()
-      selected_data <- data[selected_row, ]
-      
-      # Modal öffnen und vorausfüllen
-      showModal(edit_entry_modal(selected_data))
-    }
-  })
   
-  observeEvent(input$save_edit_entry, {
-    selected_row <- input$email_table_rows_selected
-    data <- kontaktdaten()
-    
-    # Überschreibe die ausgewählte Zeile mit neuen Werten
-    data[selected_row, ] <- tibble(
-      MSB = input$edit_msb,
-      EMAIL = input$edit_email,
-      ANREDE = input$edit_anrede,
-      EINLEITUNG = input$edit_einleitung
-    )
-    
-    # Aktualisiere reactiveVal
-    kontaktdaten(data)
-    
-    # Speichern in RData
-    save_email_data(kontaktdaten())
-    
-    # Modal schließen
-    removeModal()
-    show_success_toast("Eintrag erfolgreich aktualisiert!")
-  })
+  
+
+  
+
+  
+
   
 
   # Wenn die Sitzung endet, beende die App  
