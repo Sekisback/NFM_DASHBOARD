@@ -82,6 +82,39 @@ get_csv_files <- function(directory = "data") {
   return(files)
 }
 
+# Ereldigte CSV in done verschieben
+move_csv_to_done <- function(file_path, done_folder = "done") {
+  # Erstelle den Zielordner, falls er noch nicht existiert
+  if (!dir.exists(done_folder)) {
+    dir.create(done_folder, recursive = TRUE)
+  }
+  
+  # Zielpfad
+  target_path <- file.path(done_folder, basename(file_path))
+  
+  # Datei verschieben
+  file.rename(file_path, target_path)
+}
+
+
+update_after_csv_move <- function(session, csv_files, current_msb_type, current_file_filter) {
+  # CSV neu laden - korrekt setzen
+  new_files <- get_csv_files()
+  
+  # Neuen Wert in csv_files setzen
+  csv_files(new_files)
+  
+  # Verfügbare MSB Namen neu bestimmen
+  available_names <- extract_msb_name(basename(new_files))
+  
+  # --- MSB Name neu setzen im Dropdown ---
+  if (!is.null(current_file_filter) && current_file_filter %in% available_names) {
+    updateSelectInput(session, "file_filter", choices = c("Alle", sort(unique(available_names))), selected = current_file_filter)
+  } else {
+    updateSelectInput(session, "file_filter", choices = c("Alle", sort(unique(available_names))), selected = "Alle")
+  }
+}
+
 
 # Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
 extract_msb_name <- function(file_names) {
@@ -678,7 +711,7 @@ server <- function(input, output, session) {
     } else {
       # Neuer Text, falls kein MSB gefunden:
       missing_msb_html <- paste0(
-        "<b>Hinweis:</b> Kein Eintrag für MSB <b>", current_msb(), "</b> vorhanden."
+        "<b>Hinweis:</b> Kein Eintrag in den E-Mail Kontakten für MSB <b>", current_msb(), "</b> vorhanden."
       )
       
       updateTextInput(session, "email_empfaenger", value = "")
@@ -687,8 +720,6 @@ server <- function(input, output, session) {
       output$email_body_html <- renderUI({
         HTML(missing_msb_html)
       })
-      
-      email_body_content(missing_msb_html)
     }
   })
   
@@ -749,6 +780,17 @@ server <- function(input, output, session) {
       duration = 3,
       closeButton = TRUE,
     )
+    
+    # CSV verschieben
+    move_csv_to_done(current_file())
+    
+    # --- Update nach Verschieben
+    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
+    
+    # Index erhöhen
+    if (idx < max_idx) {
+      current_index(idx + 1)
+    }
   })
   
   
@@ -779,7 +821,13 @@ server <- function(input, output, session) {
       closeButton = TRUE,  # Nutzer kann es auch selbst wegklicken
     )
     
+    # CSV verschieben
+    move_csv_to_done(current_file())
     
+    # --- Update nach Verschieben
+    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
+    
+    # Index erhöhen
     if (idx < max_idx) {
       current_index(idx + 1)
     }
