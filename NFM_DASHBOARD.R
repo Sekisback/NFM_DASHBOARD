@@ -424,7 +424,6 @@ ui <- bs4DashPage(
                     inputId = "file_filter",
                     label = NULL,
                     choices = NULL,
-                    selected = "",
                     multiple = FALSE,
                     width = "100%"
                   )
@@ -542,7 +541,6 @@ server <- function(input, output, session) {
   ## MSB Typ ---- 
   filtered_files <- reactive({
     req(csv_files())  # Sicherstellen, dass CSVs da sind
-    
     files <- csv_files()
     
     # Filter nach MSB Typ (wMSB / gMSB)
@@ -551,43 +549,39 @@ server <- function(input, output, session) {
     }
     
     # Filter nach MSB Name (Dropdown)
-    if (!is.null(input$file_filter) && input$file_filter != "") {
+    if (!is.null(input$file_filter) && input$file_filter != "Alle" && nzchar(input$file_filter)) {
       files <- files[str_detect(basename(files), fixed(input$file_filter))]
     }
     
     files
   })
   
-  
-  ## MSB Typ Überwachung ----
+
   observeEvent(input$msb_type, {
-    # Bei Änderung des MSB Typ Filter MSB Name auf Alle setzen
-    updateSelectInput(
-      session,
-      "file_filter",
-      # Leere Auswahl entspricht "Alle"
-      selected = ""  
-    )
+    updateSelectInput(session, "file_filter", selected = "Alle")
   })
-  
   
   ## MSB Name extrahieren ----
   observe({
     req(csv_files())
     
-    # Hole die CSV-Dateinamen aus dem Ordner (ohne den Pfad)
-    file_names <- basename(csv_files())
+    files <- csv_files()
     
-    # Extrahiere die MSB-Kundennamen aus den Dateinamen
-    msb_names <- extract_msb_name(file_names)
+    # Filter nach MSB Typ
+    if (input$msb_type != "alle") {
+      files <- files[str_detect(basename(files), fixed(input$msb_type))]
+    }
     
-    # Erstelle die Dropdown-Optionen für den MSB-Kunden
+    # Extrahiere MSB Namen
+    msb_names <- extract_msb_name(basename(files))
+    
+    # Update Dropdown
     updateSelectInput(
       session,
       "file_filter",
-      choices = c("Alle" = "", unique(msb_names))
+      choices = c("Alle", sort(unique(msb_names))),
+      selected = "Alle"
     )
-
   })
   
 
@@ -599,16 +593,6 @@ server <- function(input, output, session) {
     extract_msb_name(file_names)           # Alle MSB Namen extrahieren
   })
   
-  ## MSB Name Filter Überwachung ----
-  observe({
-    # Aktualisiert das selectInput-Feld mit der ID "file_filter"
-    updateSelectInput(
-      session,
-      "file_filter",
-      # Definiert die Auswahlmöglichkeiten für das Dropdown-Menü
-      choices = c("Alle" = "", unique(filtered_msb_names()))
-    )
-  })
 
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                             PLOT                                   ----
