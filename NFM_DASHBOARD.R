@@ -46,6 +46,7 @@ if (.Platform$OS.type == "windows") {
   suppressPackageStartupMessages(library(RDCOMClient))
 }
 
+
 ## OPTIONS ----------------------------------------------------------------------
 # Vermeide Exponentialfunktion
 options(scipen = 999)
@@ -53,9 +54,11 @@ options(scipen = 999)
 # Keine Ausgabe in der CLI beim laden von Tidyverse
 options(tidiverse.quiet = TRUE)
 
+
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # ----                           FUNKTIONEN                                 ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
+
 
 # Laden der RData-Datei mit den E-Mail Kontakten
 load_email_data <- function() {
@@ -195,6 +198,164 @@ Wir möchten Sie daher bitten, diese schnellstmöglich in der aktuellen MSCONS V
 }
 
 
+
+
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
+#                             E-MAIL BODY VORLAGEN                          ----
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
+
+# CSV IN HTML-TABELLE 
+csv_to_html_table <- function(df) {
+  if (nrow(df) == 0) return("<i>Keine Daten vorhanden.</i>")
+  
+  html_table <- "<table style='width:100%; border-collapse: collapse;'>"
+  
+  html_table <- paste0(html_table, "<thead><tr>")
+  for (colname in names(df)) {
+    html_table <- paste0(html_table, "<th style='border: 1px solid #ddd; padding: 8px;'>", colname, "</th>")
+  }
+  html_table <- paste0(html_table, "</tr></thead><tbody>")
+  
+  for (i in 1:nrow(df)) {
+    html_table <- paste0(html_table, "<tr>")
+    for (j in 1:ncol(df)) {
+      value <- as.character(df[i, j])
+      html_table <- paste0(html_table, "<td style='border: 1px solid #ddd; padding: 8px;'>", value, "</td>")
+    }
+    html_table <- paste0(html_table, "</tr>")
+  }
+  
+  html_table <- paste0(html_table, "</tbody></table>")
+  
+  return(html_table)
+}
+
+
+# E-MAIL SIGNATUR HTML
+signatur_html <- function() {
+ 
+  # Liest die Bilddatei und konvertiert sie in ein Base64-kodiertes URI-Schema 
+  logo_eeg <- dataURI(file = "images/logo_eeg.png", mime = "image/png")
+  icon_mail <- dataURI(file = "images/icon_mail.png", mime = "image/png")
+  icon_www <- dataURI(file = "images/icon_www.png", mime = "image/png")
+  icon_address <- dataURI(file = "images/icon_address.png", mime = "image/png")
+  icon_leuchtturm <- dataURI(file = "images/icon_leuchtturm.png", mime = "image/png")
+  icon_linkedin <- dataURI(file = "images/icon_linkedin.png", mime = "image/png")
+  icon_xing <- dataURI(file = "images/icon_xing.png", mime = "image/png")
+  icon_instagram <- dataURI(file = "images/icon_instagram.png", mime = "image/png")
+  
+  
+  paste0(
+    # Text über der Tabelle
+    '<div style="padding-bottom:6px;">',
+    "Für  Rückfragen stehen wir gerne zur Verfügung.",
+    "<br><br><br>",
+    "Vielen Dank und viele Grüße",
+    "</div>",
+    
+    # Tabelle mit fixer Zeilenhöhe
+    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt;">',
+    
+    # Zeile 1: leer, Logo rechts mit rowspan über 3 Zeilen
+    '<tr style="height:24px;">',
+    "<td></td>",
+    '<td rowspan="3" style="text-align:right; vertical-align:bottom; padding-left:20px;">',
+    '<img src="', logo_eeg, '" style="height:70px;" alt="EEG Logo">',
+    "</td>",
+    "</tr>",
+    
+    # Zeile 2: Team
+    '<tr style="height:24px;">',
+    '<td style="vertical-align:bottom;"><b>Team Energieservice</b></td>',
+    "</tr>",
+    
+    # Zeile 3: Firma
+    '<tr style="height:24px;">',
+    '<td style="vertical-align:bottom;">Energieservice | EEG Energie- Einkaufs- und Service GmbH</td>',
+    "</tr>",
+    "</table>",
+    
+    # --- Tabelle 2: Icons ---
+    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt; margin-top:10px;">',
+    "<tr>",
+    '<td style="width:30px;"><img src="', icon_mail, '" style="height:14px; vertical-align:middle;"></td>',
+    '<td><a href="mailto:dlznn@eeg-energie.de">dlznn@eeg-energie.de</a></td>',
+    "</tr>",
+    "<tr>",
+    '<td style="width:30px;"><img src="', icon_www, '" style="height:14px; vertical-align:middle;"></td>',
+    '<td><a href="http://www.eeg-energie.de">www.eeg-energie.de</a></td>',
+    "</tr>",
+    "<tr>",
+    '<td style="width:30px;"><img src="', icon_address, '" style="height:14px; vertical-align:middle;"></td>',
+    '<td><a href="https://www.google.com/maps/...">Margarete-Steiff-Str. 1-3, 24558 Henstedt-Ulzburg</a></td>',
+    "</tr>",
+    "</table>",
+    
+    # --- Tabelle 3: Slogan + rechtlicher Hinweis ---
+    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt; margin-top:10px;">',
+    
+    # Zeile 1: Slogan + Icon mit Abstand
+    "<tr>",
+    "<td><b>Wir sind DER Ansprechpartner – Rund um das Thema Energie!</b></td>",
+    '<td style="width:40px; text-align:right; padding-left:18px;">',
+    '<img src="', icon_leuchtturm, '" style="height:24px;">',
+    "</td>",
+    "</tr>",
+    
+    # Zeile 2: Rechtlicher Hinweis
+    '<tr><td colspan="2" style="font-size:8pt; color:#AEAAAA;">',
+    "Sitz: Henstedt-Ulzburg, Amtsgericht Kiel HRB 20927KI<br>",
+    "Geschäftsführung: Marc Wiederhold (Sprecher) und Matthias Ewert",
+    "</td></tr>",
+    
+    #  Zeile 3: Social Icons mit Abstand
+    '<tr><td colspan="2" style="padding-top:10px;">',
+    '<table style="border-collapse:collapse;">',
+    '<tr style="vertical-align:middle;">',
+    '<td style="vertical-align:middle;">',
+    '<a href="https://www.linkedin.com/company/eeg-energie">',
+    '<img src="', icon_linkedin, '" style="height:25px; vertical-align:middle;"></a>',
+    '</td>',
+    '<td style="width:32px;"></td>',
+    '<td style="vertical-align:middle;">',
+    '<a href="https://www.xing.com/pages/eegenergie-einkaufs-undservicegmbh">',
+    '<img src="', icon_xing, '" style="height:25px; vertical-align:middle;"></a>',
+    '</td>',
+    '<td style="width:32px;"></td>',
+    '<td style="vertical-align:middle;">',
+    '<a href="https://www.instagram.com/eeg.energie/">',
+    '<img src="', icon_instagram, '" style="height:25px; vertical-align:middle;"></a>',
+    '</td>',
+    '</tr>',
+    '</table>',
+    '</td></tr>'
+  )
+}
+
+# Senden der Email über Outlook
+sende_mail_outlook <- function(
+    
+  empfaenger, betreff = "", body_html = "", direktversand = FALSE) {
+  
+  # Starte Outlook
+  outlook <- COMCreate("Outlook.Application")
+  
+  # Erstelle neue Mail
+  mail <- outlook$CreateItem(0)
+  
+  # Fülle Felder
+  mail[["SentOnBehalfOfName"]] <- "dlznn@eeg-energie.de"
+  mail[["To"]] <- empfaenger
+  mail[["CC"]] <- "dlznn@eeg-energie.de"
+  mail[["Subject"]] <- betreff
+  mail[["HTMLBody"]] <- body_html
+  
+  # Mail senden oder
+  #mail$Send()
+  mail$Display()
+
+}
+
 # Erfolgsmeldung oben rechts
 show_success_toast <- function(message) {
   show_toast(
@@ -232,7 +393,7 @@ ui <- bs4DashPage(
       ### Tab Hauptbereich ----
       tabPanel(
         "Hauptbereich",
-        fluidRow(
+        fluidRow(style = "margin-top: 10px;",
           
           #### Filter ----
           column(
@@ -271,36 +432,70 @@ ui <- bs4DashPage(
               
               # Abstand
               br(),
-              
               #### Plot ----
               uiOutput("plot_ui")
             )
           ),
           
-          #### Anzeige ----
+          # E-Mail Ansicht 
           column(
             width = 9,
             box(
-              title = "CSV-Dateien",
-              DTOutput("file_list"),
+              title = "E-Mail Vorschau",
               width = 12,
-              collapsible = FALSE
+              collapsible = FALSE,
+              
+              #### Buttons ----
+              fluidRow(
+                column(
+                  width = 4,
+                  actionButton("back_button", "Zurück", class = "btn-secondary")
+                ),
+                column(
+                  width = 8,
+                  div(
+                    style = "float: right;",
+                    actionButton("next_button", "Nächster", class = "btn-primary"),
+                    actionButton("send_button", "Senden", class = "btn-success", style = "margin-left: 10px;")
+                  )
+                )
+              ),
+              br(),
+              
+              #### E-Mail Ansicht ----
+              # Empfänger
+              textInput("email_empfaenger", "Empfänger (E-Mail-Adresse)", width = "100%"),
+              # Betreff
+              textInput("email_betreff", "Betreff", width = "100%"),
+              # Body
+              htmlOutput(
+                "email_body_html", 
+                container = span,
+                style = "
+                  display: block; 
+                  width: 100%; 
+                  height: 480px; 
+                  border: 1px solid #ced4da; 
+                  padding: 10px; 
+                  background-color: white; 
+                  overflow-y: auto;
+                "
+              )
             )
           )
-          
         )
       ),
       
       ### Tab E-Mails ----
       tabPanel(
         "E-Mails",
-        fluidRow(
+        fluidRow(style = "margin-top: 10px;",
           box(
             title = "E-Mail-Details",
             width = 12,
             collapsible = FALSE,
             
-            # Neue Zeile: Buttons
+            #### Buttons ----
             fluidRow(
               column(
                 width = 12,
@@ -311,7 +506,7 @@ ui <- bs4DashPage(
               )
             ),
             
-            # Danach die Tabelle
+            #### Tabelle ----
             DTOutput("email_table")
           )
         )
@@ -410,11 +605,10 @@ server <- function(input, output, session) {
     # Mindestens 75px, sonst 12px pro MSB
     max(75, length(msb_names) * 12)   
   })
-  
-  ## Plot Dynamisches UI ----
+
   output$plot_ui <- renderUI({
     div(
-      style = "border: 1px solid #ccc; padding: 10px; background-color: white;",
+      class = "plot-container",
       plotOutput("plot_msb", height = paste0(plot_height(), "px"))
     )
   })
@@ -425,25 +619,130 @@ server <- function(input, output, session) {
     msb_plot(filtered_files())
   })
   
-
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                          HAUPTABELLE                               ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  ## TABELLE *******************************************************************
-  output$file_list <- renderDT({
+  ## Daten aktualisieren ----
+  ### Aktuell ausgewählte Datei ----
+  # (Start: erste Datei oder NULL)
+  current_file <- reactiveVal(NULL)
+  
+  # Beim Start automatisch die erste Datei
+  observe({
     req(filtered_files())
+    current_file(filtered_files()[1])
+  })
+  
+  ### MSB-Name aus aktueller Datei extrahieren ----
+  current_msb <- reactive({
+    req(current_file())
+    basename(current_file()) %>% extract_msb_name()
+  })
+  
+  ### MSB-Kontakt aus Email ----
+  current_contact <- reactive({
+    req(kontaktdaten())
+    req(current_msb())
     
-    selected_msb <- input$file_filter
+    kontaktdaten() %>%
+      filter(MSB == current_msb()) %>%
+      slice(1)  # Falls mehrere Treffer, nimm den ersten
+  })
+  
+  ### Eingabefelder aktualisieren ----
+  observe({
+    contact <- current_contact()
     
-    # Wenn ein bestimmter MSB ausgewählt ist, weiter filtern
-    if (selected_msb != "") {
-      filtered <- filtered_files()[str_detect(basename(filtered_files()), fixed(selected_msb))]
+    if (nrow(contact) > 0) {
+      updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
+      updateTextInput(session, "email_betreff", value = paste("Lastgangdaten Nachforderung:", current_msb()))
+      
+      output$email_body_html <- renderUI({
+        req(current_csv_data())
+        
+        HTML(paste0(
+          contact$ANREDE, "<br><br>",
+          contact$EINLEITUNG, "<br><br>",
+          csv_to_html_table(current_csv_data())
+        ))
+      })
+      
     } else {
-      filtered <- filtered_files()
+      updateTextInput(session, "email_empfaenger", value = "")
+      updateTextInput(session, "email_betreff", value = "")
+      
+      output$email_body_html <- renderUI({
+        HTML("<i>Kein Eintrag für diesen MSB vorhanden.</i>")
+      })
     }
+  })
+  
+  ## Buttons ----
+  current_index <- reactiveVal(1)
+  
+  observe({
+    req(filtered_files())
+    idx <- current_index()
     
-    datatable(
-      data.frame(Dateien = filtered),
-      options = list(pageLength = 15)
+    # Sicherstellen, dass der Index gültig ist
+    if (idx >= 1 && idx <= length(filtered_files())) {
+      current_file(filtered_files()[idx])
+    }
+  })
+  
+  ### Button: Zurück ----
+  observeEvent(input$back_button, {
+    idx <- current_index()
+    
+    if (idx > 1) {
+      current_index(idx - 1)
+    }
+  })
+  
+  ### Button: Nächster ----
+  observeEvent(input$next_button, {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    if (idx < max_idx) {
+      current_index(idx + 1)
+    }
+  })
+  
+  ### Button: Senden ----
+  observeEvent(input$send_button, {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    # E-Mail senden
+    sende_mail_outlook(
+      empfaenger = input$email_empfaenger,
+      betreff    = input$email_betreff,
+      body_html  = as.character(input$email_body_html),  # falls nötig konvertieren
     )
+    
+    if (idx < max_idx) {
+      current_index(idx + 1)
+    }
+  })
+  
+  ## Tabelle laden ----
+  # Inhalt der aktuellen CSV-Datei einlesen
+  current_csv_data <- reactive({
+    req(current_file())
+    
+    tryCatch({
+      read_delim(
+        current_file(),
+        delim = ";",
+        locale = locale(encoding = "Windows-1252"),
+        show_col_types = FALSE
+      )
+    }, error = function(e) {
+      # Falls beim Einlesen ein Fehler auftritt, gib eine leere Tabelle zurück
+      tibble(Fehler = "Konnte CSV nicht laden.")
+    })
   })
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#

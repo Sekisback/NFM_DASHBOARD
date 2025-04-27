@@ -7,7 +7,7 @@ body, .content-wrapper {
 
 /* Containerhöhe für Tabelle festlegen */
 #table-container {
-  height: calc(100vh - 100px); 
+  height: calc(100vh - 160px); 
 }
 
 /* Erzwingt, dass die Tabelle linksbündig bleibt */
@@ -45,3 +45,19 @@ body, .content-wrapper {
   font-size: 0.9rem;
 }
 
+/* card-body Höhe */
+.card-body {
+  height: calc(100vh - 160px); 
+}
+
+
+.plot-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* <- Inhalt am unteren Ende ausrichten */
+  height: 583px;
+  border: 1px solid #ccc;
+  padding: 10px;
+  background-color: white;
+  overflow: hidden; /* keine unnötigen Scrollbars */
+}
