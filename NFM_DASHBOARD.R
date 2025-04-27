@@ -547,7 +547,8 @@ ui <- bs4DashPage(
                   width = 8,
                   div(
                     style = "float: right;",
-                    actionButton("edi_button", "bearbeiten", class = "btn-primary", style = "width: 120px;"),
+                    actionButton("del_button", "löschen", class = "btn-primary", style = "width: 120px;"),
+                    actionButton("edi_button", "bearbeiten", class = "btn-primary", style = "width: 120px; margin-left: 10px;"),
                     actionButton("send_button", "direkt Senden", class = "btn-success", style = "width: 120px; margin-left: 10px;")
                   )
                 )
@@ -821,6 +822,28 @@ server <- function(input, output, session) {
     }
   })
   
+  ### Button: löschen ----
+  observeEvent(input$del_button, {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    showNotification(
+      "CSV-Datei gelöscht.",
+      type = "message",
+      duration = 3,
+      closeButton = TRUE,
+    )
+    
+    # CSV verschieben
+    move_csv_to_done(current_file())
+    # --- Update nach Verschieben
+    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
+    
+    # Index erhöhen
+    if (idx < max_idx) {
+      current_index(idx + 1)
+    }
+  })
   
   ### Button: bearbeiten ----
   observeEvent(input$edi_button, {
