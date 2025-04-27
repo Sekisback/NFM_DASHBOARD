@@ -235,21 +235,21 @@ csv_to_html_table <- function(df) {
 signatur_html <- function() {
  
   # Liest die Bilddatei und konvertiert sie in ein Base64-kodiertes URI-Schema 
-  logo_eeg <- dataURI(file = "images/logo_eeg.png", mime = "image/png")
-  icon_mail <- dataURI(file = "images/icon_mail.png", mime = "image/png")
-  icon_www <- dataURI(file = "images/icon_www.png", mime = "image/png")
-  icon_address <- dataURI(file = "images/icon_address.png", mime = "image/png")
-  icon_leuchtturm <- dataURI(file = "images/icon_leuchtturm.png", mime = "image/png")
-  icon_linkedin <- dataURI(file = "images/icon_linkedin.png", mime = "image/png")
-  icon_xing <- dataURI(file = "images/icon_xing.png", mime = "image/png")
-  icon_instagram <- dataURI(file = "images/icon_instagram.png", mime = "image/png")
+  logo_eeg <- dataURI(file = "www/images/logo_eeg.png", mime = "image/png")
+  icon_mail <- dataURI(file = "www/images/icon_mail.png", mime = "image/png")
+  icon_www <- dataURI(file = "www/images/icon_www.png", mime = "image/png")
+  icon_address <- dataURI(file = "www/images/icon_address.png", mime = "image/png")
+  icon_leuchtturm <- dataURI(file = "www/images/icon_leuchtturm.png", mime = "image/png")
+  icon_linkedin <- dataURI(file = "www/images/icon_linkedin.png", mime = "image/png")
+  icon_xing <- dataURI(file = "www/images/icon_xing.png", mime = "image/png")
+  icon_instagram <- dataURI(file = "www/images/icon_instagram.png", mime = "image/png")
   
   
   paste0(
     # Text über der Tabelle
     '<div style="padding-bottom:6px;">',
     "Für  Rückfragen stehen wir gerne zur Verfügung.",
-    "<br><br><br>",
+    "<br><br>",
     "Vielen Dank und viele Grüße",
     "</div>",
     
@@ -333,10 +333,7 @@ signatur_html <- function() {
 }
 
 # Senden der Email über Outlook
-sende_mail_outlook <- function(
-    
-  empfaenger, betreff = "", body_html = "", direktversand = FALSE) {
-  
+sende_mail_outlook <- function(empfaenger, betreff = "", body_html = "", direktversand = FALSE) {
   # Starte Outlook
   outlook <- COMCreate("Outlook.Application")
   
@@ -350,9 +347,13 @@ sende_mail_outlook <- function(
   mail[["Subject"]] <- betreff
   mail[["HTMLBody"]] <- body_html
   
-  # Mail senden oder
-  #mail$Send()
-  mail$Display()
+  # TODO direktverseasand freigeben
+  if (direktversand) {
+    #mail$Send()
+    mail$Display()
+  } else {
+    mail$Display()
+  }
 
 }
 
@@ -449,14 +450,15 @@ ui <- bs4DashPage(
               fluidRow(
                 column(
                   width = 4,
-                  actionButton("back_button", "Zurück", class = "btn-secondary")
+                  actionButton("back_button", "Zurück", class =  "btn-primary", style = "width: 120px;"),
+                  actionButton("next_button", "Nächster", class = "btn-primary", style = "width: 120px; margin-left: 10px;")
                 ),
                 column(
                   width = 8,
                   div(
                     style = "float: right;",
-                    actionButton("next_button", "Nächster", class = "btn-primary"),
-                    actionButton("send_button", "Senden", class = "btn-success", style = "margin-left: 10px;")
+                    actionButton("edi_button", "bearbeiten", class = "btn-primary", style = "width: 120px;"),
+                    actionButton("send_button", "direkt Senden", class = "btn-success", style = "width: 120px; margin-left: 10px;")
                   )
                 )
               ),
@@ -525,6 +527,12 @@ server <- function(input, output, session) {
   
   # CSV-Liste einlesen ----
   csv_files <- reactiveVal(get_csv_files())
+  
+  # Buttons index initialisieren ----
+  current_index <- reactiveVal(1)
+  
+  # Email Body content initialisieren ----
+  email_body_content <- reactiveVal("")
   
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
@@ -658,15 +666,21 @@ server <- function(input, output, session) {
       updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
       updateTextInput(session, "email_betreff", value = paste("Lastgangdaten Nachforderung:", current_msb()))
       
+      # Body HTML generieren
+      body_html <- paste0(
+        contact$ANREDE, "<br><br>",
+        contact$EINLEITUNG, "<br><br><br>",
+        csv_to_html_table(current_csv_data()),
+        "<br>"
+      )
+      
+      # In UI anzeigen
       output$email_body_html <- renderUI({
-        req(current_csv_data())
-        
-        HTML(paste0(
-          contact$ANREDE, "<br><br>",
-          contact$EINLEITUNG, "<br><br>",
-          csv_to_html_table(current_csv_data())
-        ))
+        HTML(body_html)
       })
+      
+      # Parallel speichern für E-Mail
+      email_body_content(body_html)
       
     } else {
       updateTextInput(session, "email_empfaenger", value = "")
@@ -675,12 +689,13 @@ server <- function(input, output, session) {
       output$email_body_html <- renderUI({
         HTML("<i>Kein Eintrag für diesen MSB vorhanden.</i>")
       })
+      
+      email_body_content("<i>Kein Eintrag für diesen MSB vorhanden.</i>")
     }
   })
   
-  ## Buttons ----
-  current_index <- reactiveVal(1)
   
+  ## Buttons ----
   observe({
     req(filtered_files())
     idx <- current_index()
@@ -700,7 +715,7 @@ server <- function(input, output, session) {
     }
   })
   
-  ### Button: Nächster ----
+  ### Button: nächster ----
   observeEvent(input$next_button, {
     idx <- current_index()
     max_idx <- length(filtered_files())
@@ -710,17 +725,63 @@ server <- function(input, output, session) {
     }
   })
   
+  
+  ### Button: bearbeiten ----
+  observeEvent(input$edi_button, {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    # Neuen Body zusammenbauen
+    final_body <- paste0(
+      email_body_content(),
+      "<br><br>",
+      signatur_html()
+    )
+    
+    # E-Mail zur Bearbeitung öffnen
+    sende_mail_outlook(
+      empfaenger = input$email_empfaenger,
+      betreff    = input$email_betreff,
+      body_html  = final_body,
+      direktversand = FALSE  # <<--- WICHTIG!
+    )
+    
+    showNotification(
+      "E-Mail zur Bearbeitung geöffnet.",
+      type = "message",
+      duration = 3,
+      closeButton = TRUE,
+    )
+  })
+  
+  
   ### Button: Senden ----
   observeEvent(input$send_button, {
     idx <- current_index()
     max_idx <- length(filtered_files())
     
+    # Neuen Body zusammenbauen:
+    final_body <- paste0(
+      email_body_content(),  # der Hauptteil (Anrede, Einleitung, Tabelle)
+      "<br><br>",            # kleiner Abstand
+      signatur_html()        # DEINE Signatur unten dran
+    )
+    
     # E-Mail senden
     sende_mail_outlook(
       empfaenger = input$email_empfaenger,
       betreff    = input$email_betreff,
-      body_html  = as.character(input$email_body_html),  # falls nötig konvertieren
+      body_html  = final_body,
+      direktversand = TRUE  # <<--- WICHTIG!
     )
+    
+    showNotification(
+      "E-Mail an Outlook übergeben.",
+      type = "message",    # oder "default"
+      duration = 3,        # Sekunden sichtbar
+      closeButton = TRUE,  # Nutzer kann es auch selbst wegklicken
+    )
+    
     
     if (idx < max_idx) {
       current_index(idx + 1)
