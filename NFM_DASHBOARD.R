@@ -19,7 +19,7 @@ options(install.packages.check.source = "no")
 # Liste der Pakete
 pakete <- c(
   "devtools", "shiny", "bs4Dash", "DT", "tidyverse", "janitor",
-  "lubridate", "base64enc", "shinyWidgets", "readr", "stringr"
+  "lubridate", "base64enc", "shinyWidgets", "readr", "stringr", "purrr"
 )
 
 # Installiere fehlende Pakete ohne Rückfragen
@@ -192,8 +192,7 @@ entry_modal <- function(mode = c("new", "edit"), data = NULL) {
     "Eintrag bearbeiten"
   }
   # Default Einleitung
-  default_einleitung <- "für die in der Tabelle aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS, noch keine vollständigen Lastgangdaten empfangen.<br>
-Wir möchten Sie daher bitten, diese schnellstmöglich in der aktuellen MSCONS Version an die Ihnen bekannte edifact Adresse zu senden."
+  default_einleitung <- "für die unten aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS, noch keine vollständigen Lastgangdaten empfangen.<br>Wir möchten Sie daher bitten, die Lastgangdaten für den Monat {MONAT} noch einmal zu versenden.<br>Nutzen Sie hierzu bitte die aktuellen MSCONS-Version und die Ihnen bekannte EDIFACT-Adresse."
   # Defautl Anrede
   default_anrede <- "Sehr geehrte Damen und Herren,"
   
@@ -238,29 +237,73 @@ Wir möchten Sie daher bitten, diese schnellstmöglich in der aktuellen MSCONS V
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 
 # CSV IN HTML-TABELLE 
-csv_to_html_table <- function(df) {
+generate_email_body <- function(df, contact) {
   if (nrow(df) == 0) return("<i>Keine Daten vorhanden.</i>")
   
-  html_table <- "<table style='width:100%; border-collapse: collapse;'>"
+  df <- df |> clean_names("all_caps")
   
-  html_table <- paste0(html_table, "<thead><tr>")
-  for (colname in names(df)) {
-    html_table <- paste0(html_table, "<th style='border: 1px solid #ddd; padding: 8px;'>", colname, "</th>")
-  }
-  html_table <- paste0(html_table, "</tr></thead><tbody>")
-  
-  for (i in 1:nrow(df)) {
-    html_table <- paste0(html_table, "<tr>")
-    for (j in 1:ncol(df)) {
-      value <- as.character(df[i, j])
-      html_table <- paste0(html_table, "<td style='border: 1px solid #ddd; padding: 8px;'>", value, "</td>")
-    }
-    html_table <- paste0(html_table, "</tr>")
+  # Anrede setzen
+  anrede_text <- contact$ANREDE
+  if (is.null(anrede_text) || is.na(anrede_text)) {
+    anrede_text <- "Sehr geehrte Damen und Herren,"
   }
   
-  html_table <- paste0(html_table, "</tbody></table>")
+  # Einleitungstext übernehmen
+  einleitung_text <- contact$EINLEITUNG
+  if (is.null(einleitung_text) || is.na(einleitung_text)) {
+    einleitung_text <- "Einleitungstext in den E-Mail Kontakten fehlt"
+  }
   
-  return(html_table)
+  # Monate bestimmen
+  df_relevant <- df |>
+    select(LUCKE_VON, LUCKE_BIS) |>
+    mutate(
+      LUCKE_VON = dmy_hm(LUCKE_VON),
+      LUCKE_BIS = dmy_hm(LUCKE_BIS)
+    )
+  
+  monate <- map2(
+    df_relevant$LUCKE_VON,
+    df_relevant$LUCKE_BIS,
+    ~ seq.Date(from = floor_date(.x, "month"), to = floor_date(.y, "month"), by = "1 month")
+  ) |> 
+    unlist() |> 
+    as.Date(origin = "1970-01-01") |> 
+    unique()
+  
+  # Monatsnamen und Jahre extrahieren
+  monatsnamen <- format(monate, "%B")
+  jahre <- format(monate, "%Y")
+  
+  if (length(monate) == 1) {
+    monate_final <- paste0(monatsnamen[1], " ", jahre[1])
+  } else {
+    monate_final <- paste(
+      paste(monatsnamen[-length(monatsnamen)], collapse = ", "),
+      "und",
+      paste0(monatsnamen[length(monatsnamen)], " ", jahre[length(jahre)])
+    )
+  }
+  
+  # Zeitraum fett machen
+  monate_final_html <- paste0("<b>", monate_final, "</b>")
+  
+  # Jetzt sauber {MONAT} ersetzen
+  einleitung_text <- str_replace_all(einleitung_text, "\\{MONAT\\}", monate_final_html)
+  
+  # Meldepunkte holen
+  meldepunkte <- df$MELDEPUNKT |> unique()
+  meldepunkte_text <- paste(meldepunkte, collapse = "<br>")
+  
+  # Zusammenbauen
+  email_body <- paste0(
+    anrede_text, "<br><br>",
+    einleitung_text, "<br><br>",
+    "Betroffene Marktlokationen:<br>",
+    meldepunkte_text
+  )
+  
+  return(email_body)
 }
 
 
@@ -692,24 +735,17 @@ server <- function(input, output, session) {
       updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
       updateTextInput(session, "email_betreff", value = paste("Lastgangdaten Nachforderung:", current_msb()))
       
-      # Body HTML generieren
-      body_html <- paste0(
-        contact$ANREDE, "<br><br>",
-        contact$EINLEITUNG, "<br><br><br>",
-        csv_to_html_table(current_csv_data()),
-        "<br>"
-      )
+      # NEU: Body über MSB-Name/Contact generieren
+      body_html <- generate_email_body(current_csv_data(), contact)
       
-      # In UI anzeigen
       output$email_body_html <- renderUI({
         HTML(body_html)
       })
       
-      # Parallel speichern für E-Mail
       email_body_content(body_html)
       
     } else {
-      # Neuer Text, falls kein MSB gefunden:
+      # Kein Kontakt gefunden
       missing_msb_html <- paste0(
         "<b>Hinweis:</b> Kein Eintrag in den E-Mail Kontakten für MSB <b>", current_msb(), "</b> vorhanden."
       )
