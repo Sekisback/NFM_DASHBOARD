@@ -541,18 +541,23 @@ server <- function(input, output, session) {
   
   ## MSB Typ ---- 
   filtered_files <- reactive({
-    req(csv_files())  # Stelle sicher, dass CSV-Dateien vorhanden sind
+    req(csv_files())  # Sicherstellen, dass CSVs da sind
     
-    # Alle aktuellen Dateien
     files <- csv_files()
     
-    # Filter anwenden je nach RadioButton-Auswahl
-    if (input$msb_type == "alle") {
-      files
-    } else {
-      files[str_detect(basename(files), fixed(input$msb_type))]
+    # Filter nach MSB Typ (wMSB / gMSB)
+    if (input$msb_type != "alle") {
+      files <- files[str_detect(basename(files), fixed(input$msb_type))]
     }
+    
+    # Filter nach MSB Name (Dropdown)
+    if (!is.null(input$file_filter) && input$file_filter != "") {
+      files <- files[str_detect(basename(files), fixed(input$file_filter))]
+    }
+    
+    files
   })
+  
   
   ## MSB Typ Überwachung ----
   observeEvent(input$msb_type, {
@@ -568,26 +573,30 @@ server <- function(input, output, session) {
   
   ## MSB Name extrahieren ----
   observe({
+    req(csv_files())
+    
     # Hole die CSV-Dateinamen aus dem Ordner (ohne den Pfad)
     file_names <- basename(csv_files())
     
     # Extrahiere die MSB-Kundennamen aus den Dateinamen
     msb_names <- extract_msb_name(file_names)
     
-    # Extrahiere die MSB-Typen (wMSB oder gMSB) aus den Dateinamen
-    msb_types <- extract_msb_type(file_names)
-    
     # Erstelle die Dropdown-Optionen für den MSB-Kunden
-    updateSelectInput(session, "file_filter", choices = c("Alle" = "", unique(msb_names)))
+    updateSelectInput(
+      session,
+      "file_filter",
+      choices = c("Alle" = "", unique(msb_names))
+    )
+
   })
   
 
   ## MSB Name dynamisch Liste ----
   filtered_msb_names <- reactive({
-    # Extrahiert die Dateinamen aus dem reaktiven Ausdruck filtered_files()
-    file_names <- basename(filtered_files())
-    # Wendet die Funktion extract_msb_name auf die Dateinamen an
-    extract_msb_name(file_names)
+    req(csv_files())
+    
+    file_names <- basename(csv_files())   # ALLE Dateien nehmen!
+    extract_msb_name(file_names)           # Alle MSB Namen extrahieren
   })
   
   ## MSB Name Filter Überwachung ----
