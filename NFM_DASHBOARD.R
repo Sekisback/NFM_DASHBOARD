@@ -78,7 +78,7 @@ get_csv_files <- function(directory = "data") {
   # Hole alle CSV-Dateien im Ordner
   files <- list.files(directory, pattern = "\\.csv$", full.names = TRUE)
   # TODO Debugging Ausgabe entfernen
-  print(files)
+  # print(files)
   return(files)
 }
 
@@ -676,17 +676,21 @@ server <- function(input, output, session) {
       email_body_content(body_html)
       
     } else {
+      # Neuer Text, falls kein MSB gefunden:
+      missing_msb_html <- paste0(
+        "<b>Hinweis:</b> Kein Eintrag für MSB <b>", current_msb(), "</b> vorhanden."
+      )
+      
       updateTextInput(session, "email_empfaenger", value = "")
       updateTextInput(session, "email_betreff", value = "")
       
       output$email_body_html <- renderUI({
-        HTML("<i>Kein Eintrag für diesen MSB vorhanden.</i>")
+        HTML(missing_msb_html)
       })
       
-      email_body_content("<i>Kein Eintrag für diesen MSB vorhanden.</i>")
+      email_body_content(missing_msb_html)
     }
   })
-  
   
   ## Buttons ----
   observe({
