@@ -132,6 +132,53 @@ extract_msb_type <- function(file_names) {
   return(msb_types[!is.na(msb_types)]) 
 }
 
+# Extrahieren des VNB aus den Dateinamen
+extract_vnb <- function(filename) {
+  # Extrahiere Text nach " an " und vor [ oder .csv
+  vnb <- str_extract(filename, "(?<= an )(.*?)(?=\\[|\\.csv)")
+  vnb <- str_trim(vnb)  # Whitespace entfernen
+  return(vnb)
+}
+
+
+extract_monate_final <- function(df) {
+  if (nrow(df) == 0) return("")
+  
+  df <- df |> janitor::clean_names("all_caps")
+  
+  df_relevant <- df |>
+    select(LUCKE_VON, LUCKE_BIS) |>
+    mutate(
+      LUCKE_VON = dmy_hm(LUCKE_VON),
+      LUCKE_BIS = dmy_hm(LUCKE_BIS)
+    )
+  
+  monate <- purrr::map2(
+    df_relevant$LUCKE_VON,
+    df_relevant$LUCKE_BIS,
+    ~ seq.Date(from = floor_date(.x, "month"), to = floor_date(.y, "month"), by = "1 month")
+  ) |>
+    unlist() |>
+    as.Date(origin = "1970-01-01") |>
+    unique()
+  
+  monatsnamen <- format(monate, "%B")
+  jahre <- format(monate, "%Y")
+  
+  if (length(monate) == 1) {
+    monate_final <- paste0(monatsnamen[1], " ", jahre[1])
+  } else {
+    monate_final <- paste(
+      paste(monatsnamen[-length(monatsnamen)], collapse = ", "),
+      "und",
+      paste0(monatsnamen[length(monatsnamen)], " ", jahre[length(jahre)])
+    )
+  }
+  
+  return(monate_final)
+}
+
+
 
 # Erstelle Plot als Balkendiagramm mit der Menge der Dateien pro MSB
 msb_plot <- function(file_names) {
@@ -229,82 +276,49 @@ entry_modal <- function(mode = c("new", "edit"), data = NULL) {
   )
 }
 
-
-
-
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 #                             E-MAIL BODY VORLAGEN                          ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 
 # CSV IN HTML-TABELLE 
-generate_email_body <- function(df, contact) {
+generate_email_body <- function(df, contact, monate_final_plain) {
   if (nrow(df) == 0) return("<i>Keine Daten vorhanden.</i>")
   
   df <- df |> clean_names("all_caps")
   
-  # Anrede setzen
+  # Anrede
   anrede_text <- contact$ANREDE
   if (is.null(anrede_text) || is.na(anrede_text)) {
     anrede_text <- "Sehr geehrte Damen und Herren,"
   }
   
-  # Einleitungstext übernehmen
+  # Einleitung
   einleitung_text <- contact$EINLEITUNG
   if (is.null(einleitung_text) || is.na(einleitung_text)) {
-    einleitung_text <- "Einleitungstext in den E-Mail Kontakten fehlt"
+    einleitung_text <- "Einleitungstext fehlt"
   }
   
-  # Monate bestimmen
-  df_relevant <- df |>
-    select(LUCKE_VON, LUCKE_BIS) |>
-    mutate(
-      LUCKE_VON = dmy_hm(LUCKE_VON),
-      LUCKE_BIS = dmy_hm(LUCKE_BIS)
-    )
+  # Monate fett
+  monate_final_html <- paste0("<b>", monate_final_plain, "</b>")
   
-  monate <- map2(
-    df_relevant$LUCKE_VON,
-    df_relevant$LUCKE_BIS,
-    ~ seq.Date(from = floor_date(.x, "month"), to = floor_date(.y, "month"), by = "1 month")
-  ) |> 
-    unlist() |> 
-    as.Date(origin = "1970-01-01") |> 
-    unique()
-  
-  # Monatsnamen und Jahre extrahieren
-  monatsnamen <- format(monate, "%B")
-  jahre <- format(monate, "%Y")
-  
-  if (length(monate) == 1) {
-    monate_final <- paste0(monatsnamen[1], " ", jahre[1])
-  } else {
-    monate_final <- paste(
-      paste(monatsnamen[-length(monatsnamen)], collapse = ", "),
-      "und",
-      paste0(monatsnamen[length(monatsnamen)], " ", jahre[length(jahre)])
-    )
-  }
-  
-  # Zeitraum fett machen
-  monate_final_html <- paste0("<b>", monate_final, "</b>")
-  
-  # Jetzt sauber {MONAT} ersetzen
+  # {MONAT} ersetzen
   einleitung_text <- str_replace_all(einleitung_text, "\\{MONAT\\}", monate_final_html)
   
-  # Meldepunkte holen
+  # Meldepunkte
   meldepunkte <- df$MELDEPUNKT |> unique()
-  meldepunkte_text <- paste(meldepunkte, collapse = "<br>")
+  meldepunkte_text <- paste0("&nbsp;&nbsp;• ", meldepunkte, collapse = "<br>")
   
   # Zusammenbauen
   email_body <- paste0(
     anrede_text, "<br><br>",
     einleitung_text, "<br><br>",
-    "Betroffene Marktlokationen:<br>",
+    "Betroffene Messlokationen:<br>",
     meldepunkte_text
   )
   
   return(email_body)
 }
+
 
 
 # E-MAIL SIGNATUR HTML
@@ -454,10 +468,11 @@ show_success_toast <- function(message) {
 ui <- bs4DashPage(
   ## Browser Titel ----
   title = "LG-NACHFORDERUNG",
+  help = NULL,
+  dark = NULL,
   
-  ## Navbar ----
-  header = bs4DashNavbar(),
-  
+  ## Navbar deaktiviert
+  header = bs4DashNavbar(disable = TRUE),
   # Sidebar deaktiviert
   sidebar = bs4DashSidebar(disable = TRUE),  
  
@@ -609,6 +624,8 @@ server <- function(input, output, session) {
   # Email Body content initialisieren ----
   email_body_content <- reactiveVal("")
   
+  # Globale Variable für den aktuellen Monatszeitraum
+  monate_final_plain <- reactiveVal("")
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                            FILTER                                  ----
@@ -732,20 +749,34 @@ server <- function(input, output, session) {
     contact <- current_contact()
     
     if (nrow(contact) > 0) {
-      updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
-      updateTextInput(session, "email_betreff", value = paste("Lastgangdaten Nachforderung:", current_msb()))
+      # ---- Monatszeitraum einmal bestimmen ----
+      monate_plain <- extract_monate_final(current_csv_data())
+      monate_final_plain(monate_plain)  # In reactiveVal speichern
       
-      # NEU: Body über MSB-Name/Contact generieren
-      body_html <- generate_email_body(current_csv_data(), contact)
+      # Empfänger setzen
+      updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
+      
+      # --- Betreff dynamisch aufbauen ---
+      filename <- basename(current_file())
+      vnb <- extract_vnb(filename)
+      msb_name <- current_msb()
+      
+      betreff_text <- paste0(
+        "Fehlende Lastgangdaten im ", monate_final_plain(), ".    MSB ", msb_name, " für VNB ", vnb
+      )
+      
+      updateTextInput(session, "email_betreff", value = betreff_text)
+      
+      # --- Email Body generieren ---
+      body_html <- generate_email_body(current_csv_data(), contact, monate_final_plain())  # <<<<< HIER angepasst!
       
       output$email_body_html <- renderUI({
         HTML(body_html)
       })
-      
       email_body_content(body_html)
       
     } else {
-      # Kein Kontakt gefunden
+      # Kein Kontakt
       missing_msb_html <- paste0(
         "<b>Hinweis:</b> Kein Eintrag in den E-Mail Kontakten für MSB <b>", current_msb(), "</b> vorhanden."
       )
@@ -758,6 +789,7 @@ server <- function(input, output, session) {
       })
     }
   })
+  
   
   ## Buttons ----
   observe({
