@@ -4,10 +4,11 @@
 #
 # Author : Sascha Kornberger
 # Datum  : 26.04.2025
-# Version: 0.1.0
+# Version: 0.2.1
 #
 # History:
-# 0.1.0  Funktion: 
+# 0.2.1  Bugfix : Diagramm baklenhöhe aktualisieren
+# 0.2.0  Bugfix : Dropdown Filter aktualisieren 
 #
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 rm(list = ls())
@@ -104,7 +105,6 @@ update_after_csv_move <- function(session, csv_files, current_msb_type, current_
 }
 
 
-
 # Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
 extract_msb_name <- function(file_names) {
   # Verwende regex, um den Text zwischen "MSB" und "an" zu extrahieren
@@ -175,7 +175,7 @@ msb_plot <- function(file_names) {
   msb_names <- extract_msb_name(basename(file_names))
   
   # Zähle Vorkommen
-  msb_count <- tibble(msb = msb_names) %>%
+  msb_count <- tibble(msb = msb_names) |> 
     count(msb, sort = TRUE)
   
   # Maximalwert für die X-Achse
@@ -194,11 +194,11 @@ msb_plot <- function(file_names) {
       ),
       hjust = 0,
       vjust = 0,
-      nudge_y = 0.2,
+      nudge_y = 0.15,
       nudge_x = 0.1,
       color = "black",
       fontface = "bold",
-      size = 4
+      size = 5
     )+
     theme_minimal(base_family = "Arial") +
     labs(
@@ -617,6 +617,9 @@ server <- function(input, output, session) {
   # Globale Variable für den aktuellen Monatszeitraum
   monate_final_plain <- reactiveVal("")
   
+  # Plot höhe
+  plot_height <- reactiveVal(75)
+  
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                            FILTER                                  ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
@@ -690,13 +693,34 @@ server <- function(input, output, session) {
   # ----                             PLOT                                   ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  ## Plot dynamische Höhe berechnen ----
-  plot_height <- reactive({
+  # --- Eindeutige MSB-Namen einmalig ermitteln ----
+  max_unique_msb <- reactive({
+    all_csv_files <- get_csv_files()
+    all_msb_names <- unlist(lapply(all_csv_files, function(file) {
+      extract_msb_name(basename(file))
+    }))
+    length(unique(all_msb_names))
+  })
+  
+  # --- FUNKTION update_plot_height ---
+  update_plot_height <- function() {
     req(filtered_files())
-    file_names <- basename(filtered_files())
-    msb_names <- extract_msb_name(file_names)
-    # Mindestens 75px, sonst 12px pro MSB
-    max(75, length(msb_names) * 12)   
+    files <- filtered_files()
+    msb_names <- extract_msb_name(basename(files))
+    unique_msb_count <- length(unique(msb_names))
+    balken_hoehe <- 35
+    achsen_platz <- 50
+    max_plot_hoehe <- 583 # Maximale Plot-Höhe vor dem Scrollen
+    
+    benoetigte_hoehe <- (unique_msb_count * balken_hoehe) + achsen_platz
+    tatsaechliche_hoehe <- min(benoetigte_hoehe, max_plot_hoehe)
+    
+    # Speichere die tatsächliche Höhe für das UI
+    plot_height(tatsaechliche_hoehe)
+  }
+  
+  observeEvent(filtered_files(), {
+    update_plot_height()
   })
 
   output$plot_ui <- renderUI({
@@ -876,7 +900,7 @@ server <- function(input, output, session) {
     
     # --- Update nach Verschieben
     update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
-    
+
     # Index erhöhen
     if (idx < max_idx) {
       current_index(idx + 1)
@@ -916,7 +940,7 @@ server <- function(input, output, session) {
     
     # --- Update nach Verschieben
     update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
-    
+
     # Index erhöhen
     if (idx < max_idx) {
       current_index(idx + 1)
