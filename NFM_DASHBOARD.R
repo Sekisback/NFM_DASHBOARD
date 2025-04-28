@@ -97,23 +97,12 @@ move_csv_to_done <- function(file_path, done_folder = "done") {
 }
 
 
+# Aktualisiert die CSV-Dateien und den File-Filter nach dem Verschieben einer CSV-Datei.
 update_after_csv_move <- function(session, csv_files, current_msb_type, current_file_filter) {
-  # CSV neu laden - korrekt setzen
   new_files <- get_csv_files()
-  
-  # Neuen Wert in csv_files setzen
   csv_files(new_files)
-  
-  # Verfügbare MSB Namen neu bestimmen
-  available_names <- extract_msb_name(basename(new_files))
-  
-  # --- MSB Name neu setzen im Dropdown ---
-  if (!is.null(current_file_filter) && current_file_filter %in% available_names) {
-    updateSelectInput(session, "file_filter", choices = c("Alle", sort(unique(available_names))), selected = current_file_filter)
-  } else {
-    updateSelectInput(session, "file_filter", choices = c("Alle", sort(unique(available_names))), selected = "Alle")
-  }
 }
+
 
 
 # Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
@@ -661,21 +650,30 @@ server <- function(input, output, session) {
     
     files <- csv_files()
     
-    # Filter nach MSB Typ
     if (input$msb_type != "alle") {
       files <- files[str_detect(basename(files), fixed(input$msb_type))]
     }
     
-    # Extrahiere MSB Namen
     msb_names <- extract_msb_name(basename(files))
     
-    # Update Dropdown
-    updateSelectInput(
-      session,
-      "file_filter",
-      choices = c("Alle", sort(unique(msb_names))),
-      selected = "Alle"
-    )
+    isolate({
+      # Nur neu setzen, wenn der aktuelle Filterwert nicht mehr gültig ist
+      if (!(input$file_filter %in% msb_names)) {
+        updateSelectInput(
+          session,
+          "file_filter",
+          choices = c("Alle", sort(unique(msb_names))),
+          selected = "Alle"
+        )
+      } else {
+        updateSelectInput(
+          session,
+          "file_filter",
+          choices = c("Alle", sort(unique(msb_names))),
+          selected = input$file_filter
+        )
+      }
+    })
   })
   
 
@@ -837,6 +835,7 @@ server <- function(input, output, session) {
     # CSV verschieben
     move_csv_to_done(current_file())
     # --- Update nach Verschieben
+    
     update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
     
     # Index erhöhen
