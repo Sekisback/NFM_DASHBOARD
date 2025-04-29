@@ -198,7 +198,7 @@ msb_plot <- function(file_names) {
       nudge_x = 0.1,
       color = "black",
       fontface = "bold",
-      size = 5
+      size = 4
     )+
     theme_minimal(base_family = "Arial") +
     labs(
@@ -708,7 +708,7 @@ server <- function(input, output, session) {
     files <- filtered_files()
     msb_names <- extract_msb_name(basename(files))
     unique_msb_count <- length(unique(msb_names))
-    balken_hoehe <- 35
+    balken_hoehe <- 25
     achsen_platz <- 50
     max_plot_hoehe <- 583 # Maximale Plot-Höhe vor dem Scrollen
     
