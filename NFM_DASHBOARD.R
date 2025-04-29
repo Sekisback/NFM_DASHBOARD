@@ -702,7 +702,7 @@ server <- function(input, output, session) {
     length(unique(all_msb_names))
   })
   
-  # --- FUNKTION update_plot_height ---
+  # update_plot_height ---
   update_plot_height <- function() {
     req(filtered_files())
     files <- filtered_files()
