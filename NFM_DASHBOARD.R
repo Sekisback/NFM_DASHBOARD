@@ -439,8 +439,8 @@ sende_mail_outlook <- function(empfaenger, betreff = "", body_html = "", direktv
   
   # TODO direktverseasand freigeben
   if (direktversand) {
-    #mail$Send()
-    mail$Display()
+    mail$Send()
+    #mail$Display()
   } else {
     mail$Display()
   }
