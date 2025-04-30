@@ -48,8 +48,17 @@ body, .content-wrapper {
 /* card-body Höhe */
 .card-body {
   height: calc(100vh - 160px); 
+  background-color: #aaa;
 }
 
+.card-header {
+  background-color: #aaa;
+}
+
+.card-body.white,
+.card-header.white {
+  background-color: white;
+}
 
 .plot-container {
   display: flex;
