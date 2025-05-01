@@ -4,12 +4,13 @@
 #
 # Author : Sascha Kornberger
 # Datum  : 01.05.2025
-# Version: 0.3.0
+# Version: 0.4.0
 #
 # History:
-# 0.3.0  Bugfix : Code Optimierung mit Claude
-# 0.2.1  Bugfix : Diagramm baklenhöhe aktualisieren
-# 0.2.0  Bugfix : Dropdown Filter aktualisieren 
+# 0.4.0  Funktion: Blacklist
+# 0.3.0  Bugfix  : Code Optimierung mit Claude
+# 0.2.1  Bugfix  : Diagramm balkenhöhe aktualisieren
+# 0.2.0  Bugfix  : Dropdown Filter aktualisieren 
 #
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 rm(list = ls())
@@ -110,17 +111,15 @@ DEFAULT_CC <- "dlznn@eeg-energie.de"
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 
 
-# Laden der RData-Datei mit den E-Mail Kontakten
-load_email_data <- function() {
-  load(EMAIL_DATA_PATH)
-  return(kontaktdaten)
+# Laden der E-Mail Kontakten aus RData-Datei 
+load_data <- function() {
+  data_env <- new.env()
+  load(EMAIL_DATA_PATH, envir = data_env)
+  list(
+    kontaktdaten = data_env$kontaktdaten_df,
+    blacklist    = data_env$blacklist_df
+  )
 }
-
-# Speichern der RData-Datei mit den E-Mail Kontakten nach Änderung
-save_email_data <- function(kontaktdaten) {
-  save(kontaktdaten, file = EMAIL_DATA_PATH)
-}
-
 
 # Abrufen der CSV-Dateien aus dem Ordner
 get_csv_files <- function(directory = DATA_DIR) {
@@ -282,7 +281,7 @@ entry_modal <- function(mode = c("new", "edit"), data = NULL) {
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 
 # CSV IN HTML-TABELLE 
-generate_email_body <- function(df, contact, monate_final_plain) {
+generate_email_body <- function(df, contact, monate_final_plain, blacklist_meldepunkte = NULL) {
   if (nrow(df) == 0) return("<i>Keine Daten vorhanden.</i>")
   if (is.null(contact) || is.null(contact$ANREDE) || is.null(contact$EINLEITUNG)) {
     return("<i>Kontaktdaten unvollständig.</i>")
@@ -291,9 +290,22 @@ generate_email_body <- function(df, contact, monate_final_plain) {
   # Bereite Daten vor
   df <- df |> clean_names("all_caps")
   
+  # --- Blacklist-Filter ---
+  blacklist_hinweis <- ""
+  if (!is.null(blacklist_meldepunkte) && "MELDEPUNKT" %in% names(df)) {
+    anzahl_vorher <- nrow(df)
+    df <- df[!(df$MELDEPUNKT %in% blacklist_meldepunkte), ]
+    anzahl_nachher <- nrow(df)
+    if (anzahl_nachher < anzahl_vorher) {
+      blacklist_hinweis <- "<i>Hinweis: Einige Meldepunkte wurden aufgrund der Blacklist entfernt.</i><br><br>"
+    }
+  }
+  
+  if (nrow(df) == 0) return(paste0(blacklist_hinweis, "<i>Alle Meldepunkte wurden ausgefiltert.</i>"))
+  
+  
   # Formatiere Monatstext für HTML
   monate_final_html <- paste0("<b>", monate_final_plain, "</b>")
-  
   # Ersetze Platzhalter im Einleitungstext
   einleitung_text <- str_replace_all(contact$EINLEITUNG, "\\{MONAT\\}", monate_final_html)
   
@@ -554,7 +566,7 @@ ui <- bs4DashPage(
           column(
             width = 9,
             box(
-              title = "E-Mail Vorschau",
+              title = "E-MAIL VORSCHAU",
               width = NULL, # NULL nutzt volle Breite der Spalte
               collapsible = FALSE,
               
@@ -562,14 +574,24 @@ ui <- bs4DashPage(
               fluidRow(
                 # Navigations-Buttons links
                 column(
-                  width = 4,
+                  width = 3,
                   # Stil in eine Variable auslagern für Konsistenz
                   actionButton("back_button", "Zurück", class = "btn-primary nav-btn"),
                   actionButton("next_button", "Nächster", class = "btn-primary nav-btn")
                 ),
+                
+                # MITTE: Hinweistext
+                column(
+                  width = 5,
+                  div(
+                    style = "margin-top: 8px; text-align: center;",
+                    htmlOutput("blacklist_info")
+                  )
+                ),
+                
                 # Aktions-Buttons rechts
                 column(
-                  width = 8,
+                  width = 4,
                   div(
                     class = "text-right", # Rechtsausrichtung mit BS4-Klasse
                     actionButton("del_button", "löschen", class = "btn-primary action-btn"),
@@ -600,7 +622,6 @@ ui <- bs4DashPage(
         fluidRow(
           style = "margin-top: 10px;",
           box(
-            title = "E-Mail-Details",
             width = 12,
             collapsible = FALSE,
             class = "white",
@@ -617,6 +638,30 @@ ui <- bs4DashPage(
             DTOutput("email_table")
           )
         )
+      ),
+      
+      tabPanel(
+        "Blacklist",
+        fluidRow(
+          style = "margin-top: 10px;",
+          box(
+            
+            width = 12,
+            collapsible = FALSE,
+            class = "white",
+            
+            # Aktionsbuttons mit einheitlichem Styling
+            div(
+              class = "mb-3", # Margin-Bottom mit BS4-Klasse
+              actionButton("add_blacklist_entry", "Neu"),
+              actionButton("edit_blacklist_entry", "Bearbeiten"),
+              actionButton("delete_blacklist_entry", "Löschen")
+            ),
+            
+            # Datentabelle
+            DTOutput("blacklist_table")
+          )
+        )
       )
     )
   )
@@ -624,9 +669,19 @@ ui <- bs4DashPage(
 
 server <- function(input, output, session) {
   
-  # Initialisiere reaktive Werte mit Cache
-  # Lädt E-Mail-Daten einmalig und speichert sie reaktiv
-  kontaktdaten <- reactiveVal(load_email_data())
+  # Initialdaten laden
+  daten <- load_data()
+  
+  # Reaktive Werte initialisieren
+  kontaktdaten <- reactiveVal(daten$kontaktdaten)
+  blacklist    <- reactiveVal(daten$blacklist)
+  
+  # Speichern der RData-Datei
+  save_data <- function() {
+    kontaktdaten_df <- kontaktdaten()
+    blacklist_df <- blacklist()
+    save(kontaktdaten = kontaktdaten_df, blacklist = blacklist_df, file = EMAIL_DATA_PATH)
+  }
   
   # Lädt CSV-Dateien einmalig und speichert sie reaktiv
   csv_files <- reactiveVal(get_csv_files())
@@ -648,6 +703,8 @@ server <- function(input, output, session) {
   
   # Erstellt einen Cache für extrahierte MSB-Namen um wiederholte Berechnungen zu vermeiden
   msb_name_cache <- reactiveValues(names = list())
+  
+  blacklist_info_text <- reactiveVal("")
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                        HILFSFUNKTIONEN                            ----
@@ -852,18 +909,43 @@ server <- function(input, output, session) {
       vnb <- extract_vnb(filename)
       msb_name <- current_msb()
       
-      # Erstelle Betreff
       betreff_text <- paste0(
         "Fehlende Lastgangdaten im ", monate_final_plain(), ".    MSB ", msb_name, " für VNB ", vnb
       )
       updateTextInput(session, "email_betreff", value = betreff_text)
       
-      # Generiere E-Mail-Body
-      body_html <- generate_email_body(current_csv_data(), contact, monate_final_plain())
+      # --- NEU: Blacklist prüfen ---
+      daten_raw <- current_csv_data() |> janitor::clean_names("all_caps")
+      blacklist_mps <- trimws(toupper(blacklist()$MELDEPUNKT))  # sicherheitshalber
+      
+      # Prüfen, ob ein Meldepunkt aus der CSV auf der Blacklist steht
+      if ("MELDEPUNKT" %in% names(daten_raw)) {
+        mp_csv <- trimws(toupper(daten_raw$MELDEPUNKT))
+        hat_blacklist_treffer <- any(mp_csv %in% blacklist_mps)
+      } else {
+        hat_blacklist_treffer <- FALSE
+      }
+      
+      # Hinweistext setzen (nur wenn es Treffer gibt)
+      if (hat_blacklist_treffer) {
+        blacklist_info_text("<b>Hinweis:</b> Meldepunkte auf der Blacklist wurden aus der E-Mail entfernt.")
+      } else {
+        blacklist_info_text("")
+      }
+      
+      # Generiere E-Mail-Body mit Blacklist-Filter
+      body_html <- generate_email_body(
+        df = daten_raw,
+        contact = contact,
+        monate_final_plain = monate_final_plain(),
+        blacklist_meldepunkte = blacklist_mps
+      )
+      
       output$email_body_html <- renderUI({
         HTML(body_html)
       })
       email_body_content(body_html)
+      
     } else {
       # Kein Kontakt oder CSV-Fehler
       missing_reason <- if (nrow(contact) == 0) {
@@ -874,14 +956,20 @@ server <- function(input, output, session) {
       
       missing_html <- paste0("<b>Hinweis:</b> ", missing_reason)
       
-      # Leere Eingabefelder
       updateTextInput(session, "email_empfaenger", value = "")
       updateTextInput(session, "email_betreff", value = "")
       
-      # Zeige Hinweis
       output$email_body_html <- renderUI({
         HTML(missing_html)
       })
+      
+      blacklist_info_text("")  # Hinweis leeren, wenn Daten fehlen
+    }
+  })
+  
+  output$blacklist_info <- renderUI({
+    if (nzchar(blacklist_info_text())) {
+        HTML(blacklist_info_text())
     }
   })
   
@@ -1021,44 +1109,66 @@ server <- function(input, output, session) {
     )
   })
   
-  # Funktion für E-Mail-Kontakt-Management
-  handle_email_contacts <- function(action_type) {
-    if (action_type == "new") {
-      # Neuen Eintrag hinzufügen
+  # Datahandling - Management
+  handle_data_action <- function(data_type, action_type) {
+    if (data_type == "email") {
       data <- kontaktdaten()
-      new_row <- tibble(
-        MSB        = input$modal_msb,
-        EMAIL      = input$modal_email,
-        ANREDE     = input$modal_anrede,
-        EINLEITUNG = input$modal_einleitung
-      )
-      updated <- bind_rows(data, new_row)
-      kontaktdaten(updated)
-      save_email_data(kontaktdaten())
-      toast("Neuer Eintrag erfolgreich gespeichert!")
-    } else if (action_type == "edit") {
-      # Eintrag bearbeiten
       sel <- input$email_table_rows_selected
-      data <- kontaktdaten()
-      data[sel, ] <- tibble(
-        MSB        = input$modal_msb,
-        EMAIL      = input$modal_email,
-        ANREDE     = input$modal_anrede,
-        EINLEITUNG = input$modal_einleitung
-      )
-      kontaktdaten(data)
-      save_email_data(kontaktdaten())
-      toast("Eintrag erfolgreich aktualisiert!")
-    } else if (action_type == "delete") {
-      # Eintrag löschen
-      sel <- input$email_table_rows_selected
-      data <- kontaktdaten()
-      updated_data <- data[-sel, ]
-      kontaktdaten(updated_data)
-      save_email_data(kontaktdaten())
-      toast("Eintrag erfolgreich gelöscht!")
+    } else {
+      data <- blacklist()
+      sel <- input$blacklist_table_rows_selected
     }
     
+    if (action_type == "new") {
+      new_row <- if (data_type == "email") {
+        tibble(
+          MSB        = input$modal_msb,
+          EMAIL      = input$modal_email,
+          ANREDE     = input$modal_anrede,
+          EINLEITUNG = input$modal_einleitung
+        )
+      } else {
+        tibble(
+          MELDEPUNKT  = input$modal_meldepunkt,
+          MSB         = input$modal_msb,
+          INFORMATION = input$modal_info
+        )
+      }
+      updated <- bind_rows(data, new_row)
+      
+    } else if (action_type == "edit") {
+      if (length(sel) == 0) return()
+      
+      if (data_type == "email") {
+        data[sel, ] <- tibble(
+          MSB        = input$modal_msb,
+          EMAIL      = input$modal_email,
+          ANREDE     = input$modal_anrede,
+          EINLEITUNG = input$modal_einleitung
+        )
+      } else {
+        data[sel, ] <- tibble(
+          MELDEPUNKT  = input$modal_meldepunkt,
+          MSB         = input$modal_msb,
+          INFORMATION = input$modal_info
+        )
+      }
+      updated <- data
+      
+    } else if (action_type == "delete") {
+      if (length(sel) == 0) return()
+      updated <- data[-sel, ]
+    }
+    
+    # Rückspeichern
+    if (data_type == "email") {
+      kontaktdaten(updated)
+    } else {
+      blacklist(updated)
+    }
+    
+    save_data()
+    toast(paste("Eintrag", switch(action_type, new = "angelegt", edit = "bearbeitet", delete = "gelöscht"), "!"))
     removeModal()
   }
   
@@ -1069,7 +1179,7 @@ server <- function(input, output, session) {
   
   # E-Mail neu speichern
   observeEvent(input$save_new_entry, {
-    handle_email_contacts("new")
+    handle_data_action("email", "new")
   })
   
   # E-Mail bearbeiten
@@ -1085,7 +1195,7 @@ server <- function(input, output, session) {
   
   # E-Mail bearbeitet speichern
   observeEvent(input$save_edit_entry, {
-    handle_email_contacts("edit")
+    handle_data_action("email", "edit")
   })
   
   # E-Mail löschen
@@ -1097,9 +1207,90 @@ server <- function(input, output, session) {
         easyClose = TRUE
       ))
     } else {
-      handle_email_contacts("delete")
+      handle_data_action("email", "delete")
     }
   })
+  
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                           BLACKLIST                                ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  output$blacklist_table <- renderDT({
+    req(blacklist())
+    
+    datatable(
+      blacklist(),
+      selection = "single",
+      options = list(
+        scrollX = FALSE,
+        scrollY = "calc(100vh - 300px)",
+        pageLength = -1,
+        dom = 't',
+        autoWidth = FALSE, 
+        columnDefs = list(
+          list(width = '15%', targets = 0), 
+          list(width = '15%', targets = 1), 
+          list(width = '70%', targets = 2)
+        )
+      ),
+      rownames = FALSE 
+    )
+  })
+  
+  entry_modal_blacklist <- function(mode = "new", data = NULL) {
+    modalDialog(
+      textInput("modal_meldepunkt", "Meldepunkt", value = if (!is.null(data)) data$MELDEPUNKT else ""),
+      textInput("modal_msb", "MSB", value = if (!is.null(data)) data$MSB else ""),
+      textAreaInput("modal_info", "Info", value = if (!is.null(data)) data$INFORMATION else "", width = "100%"),
+      footer = tagList(
+        modalButton("Abbrechen"),
+        actionButton(
+          if (mode == "edit") "save_edit_blacklist_entry" else "save_new_blacklist_entry",
+          "Speichern"
+        )
+      ),
+      easyClose = TRUE
+    )
+  }
+  
+  # Neuen Blacklist-Eintrag anlegen
+  observeEvent(input$add_blacklist_entry, {
+    showModal(entry_modal_blacklist("new"))
+  })
+  
+  observeEvent(input$save_new_blacklist_entry, {
+    handle_data_action("blacklist", "new")
+  })
+  
+  # Blacklist-Eintrag bearbeiten
+  observeEvent(input$edit_blacklist_entry, {
+    sel <- input$blacklist_table_rows_selected
+    if (length(sel) == 0) {
+      showModal(modalDialog("Bitte Eintrag auswählen.", easyClose = TRUE))
+    } else {
+      dat <- blacklist()[sel, ]
+      showModal(entry_modal_blacklist("edit", dat))
+    }
+  })
+  
+  observeEvent(input$save_edit_blacklist_entry, {
+    handle_data_action("blacklist", "edit")
+  })
+  
+  # Blacklist-Eintrag löschen
+  observeEvent(input$delete_blacklist_entry, {
+    sel <- input$blacklist_table_rows_selected
+    if (length(sel) == 0) {
+      showModal(modalDialog("Bitte erst einen Eintrag auswählen.", easyClose = TRUE))
+    } else {
+      handle_data_action("blacklist", "delete")
+    }
+  })
+  
+
+  
+  
+  
   
   # Beende die App, wenn die Sitzung endet
   session$onSessionEnded(function() {
