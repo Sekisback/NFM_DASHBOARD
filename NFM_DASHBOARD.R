@@ -3,10 +3,11 @@
 # NFM DASHBOARD                                                             ----
 #
 # Author : Sascha Kornberger
-# Datum  : 26.04.2025
-# Version: 0.2.1
+# Datum  : 01.05.2025
+# Version: 0.3.0
 #
 # History:
+# 0.3.0  Bugfix : Code Optimierung mit Claude
 # 0.2.1  Bugfix : Diagramm baklenhöhe aktualisieren
 # 0.2.0  Bugfix : Dropdown Filter aktualisieren 
 #
@@ -17,44 +18,92 @@ rm(list = ls())
 # Optionen setzen – unterdrückt manche Dialoge zusätzlich
 options(install.packages.check.source = "no")
 
-# Liste der Pakete
-pakete <- c(
-  "devtools", "shiny", "bs4Dash", "DT", "tidyverse", "janitor",
+# Funktion zum effizienten Laden von Paketen
+lade_pakete <- function(pakete) {
+  # Prüfe welche Pakete fehlen
+  fehlende_pakete <- pakete[!pakete %in% installed.packages()[, "Package"]]
+  
+  # Installiere fehlende Pakete, falls vorhanden
+  if (length(fehlende_pakete) > 0) {
+    message("Installiere fehlende Pakete: ", paste(fehlende_pakete, collapse = ", "))
+    install.packages(
+      fehlende_pakete,
+      repos = "https://cran.r-project.org",
+      quiet = TRUE
+    )
+  }
+  
+  # Lade alle Pakete mit Fortschrittsindikator
+  for (paket in pakete) {
+    suppressPackageStartupMessages(library(paket, character.only = TRUE))
+  }
+  
+  message("Alle Pakete erfolgreich geladen.")
+}
+
+# Liste der benötigten Pakete
+standard_pakete <- c(
+  "shiny", "bs4Dash", "DT", "tidyverse", "janitor",
   "lubridate", "base64enc", "shinyWidgets", "readr", "stringr", "purrr"
 )
 
-# Installiere fehlende Pakete ohne Rückfragen
-installiere_fehlende <- pakete[!pakete %in% installed.packages()[, "Package"]]
-if (length(installiere_fehlende) > 0) {
-  install.packages(
-    installiere_fehlende,
-    repos = "https://cran.r-project.org",
-    quiet = TRUE
-  )
-}
+# Lade Standard-Pakete
+lade_pakete(standard_pakete)
 
-# Lade alle Pakete
-invisible(lapply(pakete, function(pkg) {
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-}))
-
-# RDCOMClient ist nicht in CRAN, daher muss es von GitHub installiert werden
-# Prüfen, ob das System Windows ist
+# Spezieller Fall für RDCOMClient (nur Windows)
 if (.Platform$OS.type == "windows") {
-  if (!requireNamespace("RDCOMClient", quietly = TRUE)) {
-    devtools::install_github("omegahat/RDCOMClient")
+  # Prüfe ob devtools installiert ist
+  if (!requireNamespace("devtools", quietly = TRUE)) {
+    install.packages("devtools", repos = "https://cran.r-project.org", quiet = TRUE)
+    suppressPackageStartupMessages(library(devtools))
   }
-  suppressPackageStartupMessages(library(RDCOMClient))
+  
+  # Installiere RDCOMClient falls nötig
+  if (!requireNamespace("RDCOMClient", quietly = TRUE)) {
+    message("Installiere RDCOMClient von GitHub...")
+    tryCatch(
+      devtools::install_github("omegahat/RDCOMClient"),
+      error = function(e) message("Fehler bei der Installation von RDCOMClient: ", e$message)
+    )
+  }
+  
+  # Lade RDCOMClient
+  if (requireNamespace("RDCOMClient", quietly = TRUE)) {
+    suppressPackageStartupMessages(library(RDCOMClient))
+    message("RDCOMClient erfolgreich geladen.")
+  } else {
+    warning("RDCOMClient konnte nicht geladen werden. Outlook-Funktionen werden nicht verfügbar sein.")
+  }
 }
 
-
-## OPTIONS ----------------------------------------------------------------------
+## OPTIONS ---------------------------------------------------------------------
 # Vermeide Exponentialfunktion
 options(scipen = 999)
 
 # Keine Ausgabe in der CLI beim laden von Tidyverse
 options(tidiverse.quiet = TRUE)
 
+
+## Variablen und Konstanten ----------------------------------------------------
+# Dateipfad Kontaktdaten
+EMAIL_DATA_PATH <- "EMails.RData"
+
+# Ordner
+DATA_DIR <- "data"
+DONE_DIR <- "done"
+
+# Standardwerte für Modal-Dialoge
+DEFAULT_EINLEITUNG <- paste(
+  "für die unten aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS,", 
+  "noch keine vollständigen Lastgangdaten empfangen.<br>",
+  "Wir möchten Sie daher bitten, die Lastgangdaten für den Monat {MONAT} noch einmal zu versenden.<br>",
+  "Nutzen Sie hierzu bitte die aktuellen MSCONS-Version und die Ihnen bekannte EDIFACT-Adresse."
+)
+DEFAULT_ANREDE <- "Sehr geehrte Damen und Herren,"
+
+# Konstanten für Email-Konfiguration
+DEFAULT_SENDER <- "dlznn@eeg-energie.de"
+DEFAULT_CC <- "dlznn@eeg-energie.de"
 
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # ----                           FUNKTIONEN                                 ----
@@ -63,228 +112,151 @@ options(tidiverse.quiet = TRUE)
 
 # Laden der RData-Datei mit den E-Mail Kontakten
 load_email_data <- function() {
-  load("EMails.RData") 
-  return(kontaktdaten) 
+  load(EMAIL_DATA_PATH)
+  return(kontaktdaten)
 }
 
 # Speichern der RData-Datei mit den E-Mail Kontakten nach Änderung
 save_email_data <- function(kontaktdaten) {
-  save(kontaktdaten, file = "EMails.RData")
+  save(kontaktdaten, file = EMAIL_DATA_PATH)
 }
 
 
 # Abrufen der CSV-Dateien aus dem Ordner
-get_csv_files <- function(directory = "data") {
-  # Hole alle CSV-Dateien im Ordner
-  files <- list.files(directory, pattern = "\\.csv$", full.names = TRUE)
-  return(files)
+get_csv_files <- function(directory = DATA_DIR) {
+  list.files(directory, pattern = "\\.csv$", full.names = TRUE)
 }
 
 # Ereldigte CSV in done verschieben
-move_csv_to_done <- function(file_path, done_folder = "done") {
-  # Erstelle den Zielordner, falls er noch nicht existiert
+move_csv_to_done <- function(file_path, done_folder = DONE_DIR) {
   if (!dir.exists(done_folder)) {
     dir.create(done_folder, recursive = TRUE)
   }
-  
-  # Zielpfad
-  target_path <- file.path(done_folder, basename(file_path))
-  
-  # Datei verschieben
-  file.rename(file_path, target_path)
+  file.rename(file_path, file.path(done_folder, basename(file_path)))
 }
 
 
 # Aktualisiert die CSV-Dateien und den File-Filter nach dem Verschieben einer CSV-Datei.
 update_after_csv_move <- function(session, csv_files, current_msb_type, current_file_filter) {
-  # Rufe die aktuelle Liste der CSV-Dateien ab
-  new_files <- get_csv_files()
-  # Aktualisiere die reaktive Variable csv_files mit der neuen Liste
-  csv_files(new_files)
+  csv_files(get_csv_files())
 }
 
 
 # Extrahieren des Namens zwischen "MSB" und "an" aus den Dateinamen
 extract_msb_name <- function(file_names) {
-  # Extrahiere Teile der Dateinamen nach "MSB " und vor " an"
-  msb_names <- str_extract(file_names, "(?<=MSB\\s)(.*?)(?=\\san)")
-  # Gib die extrahierten Namen zurück, ohne fehlende Werte
-  return(msb_names[!is.na(msb_names)])  
+  str_extract(file_names, "(?<=MSB\\s)(.*?)(?=\\san)") |>
+    {\(x) x[!is.na(x)]}()
 }
 
 
 # Extrahieren des MSB-Typs (wMSB oder gMSB) aus den Dateinamen
 extract_msb_type <- function(file_names) {
-  # Suche nach 'wMSB' oder 'gMSB' im Dateinamen
-  msb_types <- str_extract(file_names, "(wMSB|gMSB)")
-  # Gib die gefundenen Typen ohne leere Werte zurück
-  return(msb_types[!is.na(msb_types)]) 
+  str_extract(file_names, "(wMSB|gMSB)") |>
+    {\(x) x[!is.na(x)]}()
 }
 
 
 # Extrahieren des VNB aus den Dateinamen
 extract_vnb <- function(filename) {
-  # Suche Text zwischen " an " und "[" oder ".csv"
-  vnb <- str_extract(filename, "(?<= an )(.*?)(?=\\[|\\.csv)")
-  # Entferne Leerzeichen am Anfang und Ende
-  vnb <- str_trim(vnb)
-  # Gib den extrahierten Text zurück
-  return(vnb)
+  str_extract(filename, "(?<= an )(.*?)(?=\\[|\\.csv)") |>
+    str_trim()
 }
 
 
 # Extrahiere den oder die Monate aus dem Datenframe
 extract_monate <- function(df) {
-  # Wenn der Datenframe leer ist, gib einen leeren String zurück
   if (nrow(df) == 0) return("")
   
-  # Bereinige die Spaltennamen (alles in Großbuchstaben)
-  df <- df |> clean_names("all_caps")
-  
-  # Wähle die relevanten Spalten für den Zeitraum aus
-  df_relevant <- df |>
+  # Bereinige die Spaltennamen und extrahiere Zeitraum
+  monate <- df |> 
+    clean_names("all_caps") |>
     select(LUCKE_VON, LUCKE_BIS) |>
-    # Konvertiere die Datums- und Zeitangaben
     mutate(
       LUCKE_VON = dmy_hm(LUCKE_VON),
       LUCKE_BIS = dmy_hm(LUCKE_BIS)
-    )
-  
-  # Erstelle eine Liste der Monate zwischen Start- und Enddatum
-  monate <- map2(
-    df_relevant$LUCKE_VON,
-    df_relevant$LUCKE_BIS,
-    # Erzeugt eine Sequenz von Monatsanfängen
-    ~ seq.Date(from = floor_date(.x, "month"), to = floor_date(.y, "month"), by = "1 month")
-  ) |>
-    # Reduziere die Liste zu einem Vektor
+    ) |>
+    # Verwende eine einzige pmap-Operation statt map2
+    pmap(function(LUCKE_VON, LUCKE_BIS) {
+      seq.Date(
+        from = floor_date(LUCKE_VON, "month"), 
+        to = floor_date(LUCKE_BIS, "month"), 
+        by = "1 month"
+      )
+    }) |>
     unlist() |>
-    # Stelle sicher, dass es Datumsangaben sind
     as.Date(origin = "1970-01-01") |>
-    # Entferne doppelte Monatsangaben
-    unique()
+    unique() |>
+    sort()  # Stellt sicher, dass die Monate geordnet sind
   
-  # Formatiere die Monatszahlen zu Monatsnamen
+  # Bereite formatierte Monatsnamen und Jahre vor
   monatsnamen <- format(monate, "%B")
-  # Extrahiere die Jahreszahlen
   jahre <- format(monate, "%Y")
   
-  # Wenn nur ein Monat vorhanden ist
+  # Formatiere Ausgabe basierend auf Anzahl der Monate
   if (length(monate) == 1) {
-    # Erstelle eine formatierte Ausgabe: "Monatsname Jahr"
-    monate_final <- paste0(monatsnamen[1], " ", jahre[1])
+    return(paste0(monatsnamen[1], " ", jahre[1]))
   } else {
-    # Erstelle eine formatierte Ausgabe für mehrere Monate
-    monate_final <- paste(
-      # Alle Monatsnamen außer dem letzten, durch Komma getrennt
+    return(paste(
       paste(monatsnamen[-length(monatsnamen)], collapse = ", "),
       "und",
-      # Der letzte Monatsname mit der zugehörigen Jahreszahl
       paste0(monatsnamen[length(monatsnamen)], " ", jahre[length(jahre)])
-    )
+    ))
   }
-  # Gib die formatierte Zeichenkette der Monate zurück
-  return(monate_final)
 }
 
 
 # Erstelle Plot als Balkendiagramm mit der Menge der Dateien pro MSB
 msb_plot <- function(file_names) {
-  # Extrahiere die MSB-Namen aus den Dateinamen
-  msb_names <- extract_msb_name(basename(file_names))
-  
-  # Zähle, wie oft jeder MSB-Name vorkommt
-  msb_count <- tibble(msb = msb_names) |> 
+  # Extrahiere und zähle MSB-Namen
+  msb_count <- tibble(msb = extract_msb_name(basename(file_names))) |> 
     count(msb, sort = TRUE)
   
-  # Finde den höchsten Zählwert für die X-Achsenbegrenzung
+  if (nrow(msb_count) == 0) return(ggplot() + theme_void() + labs(title = "Keine MSB Daten verfügbar"))
+  
   max_value <- max(msb_count$n, na.rm = TRUE)
   
-  # Erstelle den ggplot
-  ggplot(msb_count, aes(x = n, y = reorder(msb, n))) +
-    # Erstelle Balken mit blauer Füllung und schmaler Breite
-    geom_col(fill = "steelblue", width = 0.4, just = 1) +
-    # Füge eine vertikale Linie bei x = 0 hinzu
-    geom_vline(xintercept = 0) +
-    # Füge Textbeschriftungen für die MSB-Namen hinzu
-    geom_text(
-      data = msb_count,
-      mapping = aes(
-        x = 0,
-        y = msb,
-        # Beschrifte mit großgeschriebenem MSB-Namen
-        label = str_to_title(msb)
-      ),
-      # Horizontal linksbündig ausrichten
-      hjust = 0,
-      # Leichte horizontale Verschiebung
-      nudge_x = 0.1,
-      # Vertical mittig ausrichten
-      vjust = 0,
-      # Leichte vertikale Verschiebung
-      nudge_y = 0.15,
-      # Schwarze Textfarbe
-      color = "black",
-      # Fettdruck
-      fontface = "bold",
-      # Schriftgröße 5
-      size = 5
-    )+
-    # Verwende minimalistisches Theme mit Arial-Schrift
-    theme_minimal(base_family = "Arial") +
-    # Entferne Achsenbeschriftungen und Titel
-    labs(
-      x = element_blank(),
-      y = element_blank(),
-      title = element_blank(),
-    ) +
-    # Entferne die Hauptgitterlinien
+  # Definiere gemeinsame Themen für den Plot
+  theme_settings <- theme_minimal(base_family = "Arial") +
     theme(
       panel.grid.major = element_blank(),
-    )+
-    # Entferne die Beschriftungen der y-Achse
-    scale_y_discrete(labels = NULL)+
-    # Definiere die Skala der x-Achse
-    scale_x_continuous(
-      # Setze Limits oder verwende NA für automatische Anpassung
-      limits = c(0, ifelse(max_value < 10, 10, NA)),
-      # Definiere die Achsenbruche
-      breaks = 0:max(10, max_value),
-      # Füge etwas Platz am Rand hinzu
-      expand = expansion(mult = c(0, 0.05))
+      axis.title = element_blank(),
+      plot.title = element_blank()
     )
+  
+  # Erstelle den ggplot mit einer Pipe
+  ggplot(msb_count, aes(x = n, y = reorder(msb, n))) +
+    geom_col(fill = "steelblue", width = 0.4, just = 1) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      aes(x = 0, y = msb, label = str_to_title(msb)),
+      hjust = 0, nudge_x = 0.1, vjust = 0, nudge_y = 0.15,
+      color = "black", fontface = "bold", size = 5
+    ) +
+    scale_y_discrete(labels = NULL) +
+    scale_x_continuous(
+      limits = c(0, ifelse(max_value < 10, 10, NA)),
+      breaks = 0:max(10, max_value),
+      expand = expansion(mult = c(0, 0.05))
+    ) +
+    theme_settings
 }
 
 
 # Modal für Neu- und Edit-Einträge
 entry_modal <- function(mode = c("new", "edit"), data = NULL) {
-  # Stelle sicher, dass der Modus "new" oder "edit" ist
   mode <- match.arg(mode)
   
-  # Setze den Titel des Dialogfensters basierend auf dem Modus
-  dlg_title <- if (mode == "new") {
-    "Neuen Eintrag hinzufügen"
-  } else {
-    "Eintrag bearbeiten"
-  }
-  
-  # Standard-Einleitungstext für neue Einträge
-  default_einleitung <- "für die unten aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS, noch keine vollständigen Lastgangdaten empfangen.<br>Wir möchten Sie daher bitten, die Lastgangdaten für den Monat {MONAT} noch einmal zu versenden.<br>Nutzen Sie hierzu bitte die aktuellen MSCONS-Version und die Ihnen bekannte EDIFACT-Adresse."
-  # Standard-Anrede
-  default_anrede <- "Sehr geehrte Damen und Herren,"
-  
-  # Setze Standardwerte oder verwende Daten für die Bearbeitung
+  # Verwende Standardwerte, wenn nicht im Edit-Modus oder bestimmte Werte fehlen
   vals <- list(
-    msb        = if (mode == "edit") data$MSB        else "",
-    email      = if (mode == "edit") data$EMAIL      else "",
-    anrede     = if (mode == "edit") data$ANREDE     else default_anrede,
-    einleitung = if (mode == "edit") data$EINLEITUNG else default_einleitung
+    msb        = if (mode == "edit" && !is.null(data$MSB)) data$MSB else "",
+    email      = if (mode == "edit" && !is.null(data$EMAIL)) data$EMAIL else "",
+    anrede     = if (mode == "edit" && !is.null(data$ANREDE)) data$ANREDE else DEFAULT_ANREDE,
+    einleitung = if (mode == "edit" && !is.null(data$EINLEITUNG)) data$EINLEITUNG else DEFAULT_EINLEITUNG
   )
   
-  # Definiere die ID des Speicher-Buttons basierend auf dem Modus
+  dlg_title <- if (mode == "new") "Neuen Eintrag hinzufügen" else "Eintrag bearbeiten"
   save_id <- if (mode == "new") "save_new_entry" else "save_edit_entry"
   
-  # Erstelle das modale Dialogfenster
   modalDialog(
     size = "xl",
     title = dlg_title,
@@ -293,22 +265,14 @@ entry_modal <- function(mode = c("new", "edit"), data = NULL) {
       column(4, textInput("modal_email", "E-Mail Adresse", value = vals$email)),
       column(4, textInput("modal_anrede", "Anrede", value = vals$anrede))
     ),
-    # Eingabefeld für den Einleitungssatz (mehrzeilig)
     textAreaInput(
-      "modal_einleitung", 
-      "Einleitungssatz", 
-      value = vals$einleitung, 
-      # Breite setzen
-      width = "100%",
-      # Mindestens 3 Zeilen hoch
-      rows = 3             
+      "modal_einleitung", "Einleitungssatz", value = vals$einleitung, 
+      width = "100%", rows = 3
     ),
-    # Fußzeile des Modals mit Buttons
     footer = tagList(
       modalButton("Abbrechen"),
       actionButton(save_id, "Speichern", class = "btn-primary")
     ),
-    # Ermögliche das Schließen des Modals durch Klicken außerhalb
     easyClose = TRUE
   )
 }
@@ -319,44 +283,41 @@ entry_modal <- function(mode = c("new", "edit"), data = NULL) {
 
 # CSV IN HTML-TABELLE 
 generate_email_body <- function(df, contact, monate_final_plain) {
-  # Wenn der Datenframe leer ist, gib eine Info-Nachricht zurück
   if (nrow(df) == 0) return("<i>Keine Daten vorhanden.</i>")
+  if (is.null(contact) || is.null(contact$ANREDE) || is.null(contact$EINLEITUNG)) {
+    return("<i>Kontaktdaten unvollständig.</i>")
+  }
   
-  # Bereinige die Spaltennamen (alles in Großbuchstaben)
+  # Bereite Daten vor
   df <- df |> clean_names("all_caps")
   
-  # Erstelle den Anredetext
-  anrede_text <- contact$ANREDE
-
-  # Erstelle den Einleitungstext
-  einleitung_text <- contact$EINLEITUNG
-  
-  # Formatiere die Monate fett für HTML
+  # Formatiere Monatstext für HTML
   monate_final_html <- paste0("<b>", monate_final_plain, "</b>")
   
-  # Ersetze Platzhalter {MONAT} im Einleitungstext
-  einleitung_text <- str_replace_all(einleitung_text, "\\{MONAT\\}", monate_final_html)
+  # Ersetze Platzhalter im Einleitungstext
+  einleitung_text <- str_replace_all(contact$EINLEITUNG, "\\{MONAT\\}", monate_final_html)
   
-  # Extrahiere die eindeutigen Meldepunkte
-  meldepunkte <- df$MELDEPUNKT |> unique()
-  # Formatiere die Meldepunkte als Liste für HTML
-  meldepunkte_text <- paste0("&nbsp;&nbsp;• ", meldepunkte, collapse = "<br>")
+  # Erstelle HTML für Meldepunkte - mit Fehlerbehandlung falls die Spalte fehlt
+  meldepunkte_text <- if ("MELDEPUNKT" %in% names(df)) {
+    meldepunkte <- unique(df$MELDEPUNKT)
+    paste0("&nbsp;&nbsp;• ", meldepunkte, collapse = "<br>")
+  } else {
+    "<i>Keine Meldepunkte gefunden</i>"
+  }
   
-  # Füge alle Teile zum E-Mail-Body zusammen
-  email_body <- paste0(
-    anrede_text, "<br><br>",
+  # Baue E-Mail-Body zusammen
+  paste0(
+    contact$ANREDE, "<br><br>",
     einleitung_text, "<br><br>",
     "Betroffene Messlokationen:<br>",
     meldepunkte_text
   )
-  # Gib den erstellten E-Mail-Body zurück
-  return(email_body)
 }
 
 
 # E-MAIL SIGNATUR HTML
 signatur_html <- function() {
- 
+  
   # Liest die Bilddatei und konvertiert sie in ein Base64-kodiertes URI-Schema 
   logo_eeg <- dataURI(file = "www/images/logo_eeg.png", mime = "image/png")
   icon_mail <- dataURI(file = "www/images/icon_mail.png", mime = "image/png")
@@ -457,44 +418,58 @@ signatur_html <- function() {
 
 
 # Senden der Email über Outlook
-sende_mail_outlook <- function(empfaenger, betreff = "", body_html = "", direktversand = FALSE) {
-  # Starte die Outlook-Anwendung
-  outlook <- COMCreate("Outlook.Application")
-  
-  # Erstelle neue Mail
-  mail <- outlook$CreateItem(0)
-  
-  # Setze die Absenderadresse (im Auftrag von)
-  mail[["SentOnBehalfOfName"]] <- "dlznn@eeg-energie.de"
-  # Setze den/die Empfänger
-  mail[["To"]] <- empfaenger
-  # Setze die CC-Adresse
-  mail[["CC"]] <- "dlznn@eeg-energie.de"
-  # Setze den Betreff der E-Mail
-  mail[["Subject"]] <- betreff
-  # Setze den HTML-Inhalt des E-Mail-Bodys
-  mail[["HTMLBody"]] <- body_html
-  
-  # Prüfe, ob die E-Mail direkt versendet werden soll
-  if (direktversand) {
-    # Aktiviere den direkten Versand
-    mail$Display()
-  } else {
-    # Zeige die E-Mail zur Überprüfung an
-    mail$Display()
+sende_mail_outlook <- function(
+    empfaenger, 
+    betreff = "", 
+    body_html = "", 
+    direktversand = FALSE,
+    cc = DEFAULT_CC,
+    sender = DEFAULT_SENDER
+) {
+  # Prüfe die Eingabeparameter
+  if (missing(empfaenger) || is.null(empfaenger) || empfaenger == "") {
+    toast("Kein Empfänger angegeben. E-Mail wurde nicht gesendet.", "error")
+    return(invisible(FALSE))
   }
+  
+  tryCatch({
+    # Starte die Outlook-Anwendung
+    outlook <- COMCreate("Outlook.Application")
+    
+    # Erstelle neue Mail (0 = olMailItem)
+    mail <- outlook$CreateItem(0)
+    
+    # Setze die E-Mail-Eigenschaften
+    mail[["SentOnBehalfOfName"]] <- sender
+    mail[["To"]] <- empfaenger
+    mail[["CC"]] <- cc
+    mail[["Subject"]] <- betreff
+    mail[["HTMLBody"]] <- body_html
+    
+    # Führe die gewünschte Aktion aus
+    if (direktversand) {
+      mail$Send()
+      return(invisible(TRUE))
+    } else {
+      mail$Display()
+      return(invisible(TRUE))
+    }
+  }, error = function(e) {
+    warning(paste("Fehler beim Erstellen der E-Mail:", e$message))
+    return(invisible(FALSE))
+  })
 }
 
 
 # Zeige eine Erfolgsmeldung oben rechts
-show_success_toast <- function(message) {
+toast <- function(message, type = "success") {
   show_toast(
     # Der Haupttext der Meldung ist der Input
     title = message,
     # Kein weiterer Text unterhalb des Titels
     text = NULL,
     # Typ der Meldung: Erfolg (grünes Symbol)
-    type = "success",
+    type = type,
     # Dauer der Anzeige in Millisekunden (1,5 Sekunden)
     timer = 1500,
     # Zeige einen Fortschrittsbalken unterhalb der Zeit
@@ -513,167 +488,132 @@ show_success_toast <- function(message) {
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # UI-Definition mit bs4Dash
 ui <- bs4DashPage(
-  ## Browser Titel ----
+  # Browser Titel - kompakte Definition
   title = "LG-NACHFORDERUNG",
   help = NULL,
   dark = NULL,
   
-  ## Navbar deaktiviert
+  # Navbar und Sidebar direkt als deaktiviert definieren
   header = bs4DashNavbar(disable = TRUE),
-  # Sidebar deaktiviert
-  sidebar = bs4DashSidebar(disable = TRUE),  
- 
-  ## Body ----
+  sidebar = bs4DashSidebar(disable = TRUE),
+  
+  # Body des Dashboards
   body = bs4DashBody(
-    # Füge benutzerdefiniertes CSS hinzu
-    includeCSS(file.path(getwd(), "www/styles.css")),
-    # Füge benutzerdefiniertes JavaScript hinzu
-    includeScript(file.path(getwd(), "www/custom.js")),
+    # CSS und JS mit relativen Pfaden einbinden
+    tags$head(
+      includeCSS("www/styles.css"),
+      includeScript("www/custom.js")
+    ),
     
-    # Erstelle eine Tabellen-Struktur für Haupt- und E-Mail-Bereich
+    # Haupt-Tabset mit vereinfachter Struktur
     tabsetPanel(
-      ### Tab Hauptbereich ----
+      ### Tab Hauptbereich
       tabPanel(
         "Hauptbereich",
-        # Füge einen oberen Rand hinzu
-        fluidRow(style = "margin-top: 10px;",
+        fluidRow(
+          style = "margin-top: 10px;",
           
-          #### Filter ----
+          # Messstellenbetreiber-Box links
           column(
             width = 3,
-            class = "messstellenbetreiber-box-parent",
-            # Umfasst die Filter für Messstellenbetreiber
             box(
               title = "MESSSTELLENBETREIBER",
-              width = 12,
-              # Verwende eine Monospace-Schriftart
+              width = NULL, # NULL nutzt volle Breite der Spalte
               style = "font-family: monospace;",
-              # Box ist nicht einklappbar
               collapsible = FALSE,
-
-              # Erste Zeile: Radiobuttons und Dropdown nebeneinander
+              
+              # Filter-Bereich mit MSB-Auswahl
               fluidRow(
                 column(
                   width = 3,
-                  # Auswahl zwischen allen, wMSB und gMSB
                   radioButtons(
                     inputId = "msb_type",
                     label = NULL,
                     choices = c("ALLE" = "alle", "wMSB" = "wMSB", "gMSB" = "gMSB"),
-                    selected = "alle",
-                    # Buttons untereinander
-                    inline = FALSE  
+                    selected = "alle"
                   )
                 ),
                 column(
                   width = 9,
-                  # Dropdown zur Auswahl von Dateien/Filtern
                   selectInput(
                     inputId = "file_filter",
                     label = NULL,
                     choices = NULL,
-                    multiple = FALSE,
                     width = "100%"
                   )
                 )
               ),
               
-              # Füge einen vertikalen Abstand ein
-              br(),
-              #### Plot-Ausgabe ----
-              uiOutput("plot_ui")
+              # Plot-Bereich mit einfacherem Abstand
+              div(style = "margin-top: 15px;", 
+                  uiOutput("plot_ui"))
             )
           ),
           
-          # Bereich für die E-Mail-Ansicht
+          # E-Mail-Vorschau rechts
           column(
             width = 9,
             box(
               title = "E-Mail Vorschau",
-              width = 12,
-              # Box ist nicht einklappbar
+              width = NULL, # NULL nutzt volle Breite der Spalte
               collapsible = FALSE,
-
               
-              #### Buttons für die E-Mail-Aktionen ----
+              # Navigation und Aktions-Buttons
               fluidRow(
+                # Navigations-Buttons links
                 column(
                   width = 4,
-                  # Button zum Zurückgehen
-                  actionButton("back_button", "Zurück", class =  "btn-primary", style = "width: 120px;"),
-                  # Button zum Weitergehen
-                  actionButton("next_button", "Nächster", class = "btn-primary", style = "width: 120px; margin-left: 10px;")
+                  # Stil in eine Variable auslagern für Konsistenz
+                  actionButton("back_button", "Zurück", class = "btn-primary nav-btn"),
+                  actionButton("next_button", "Nächster", class = "btn-primary nav-btn")
                 ),
+                # Aktions-Buttons rechts
                 column(
                   width = 8,
-                  # Buttons rechtsbündig
                   div(
-                    style = "float: right;",
-                    # Button zum Löschen
-                    actionButton("del_button", "löschen", class = "btn-primary", style = "width: 120px;"),
-                    # Button zum Bearbeiten
-                    actionButton("edi_button", "bearbeiten", class = "btn-primary", style = "width: 120px; margin-left: 10px;"),
-                    # Button zum direkten Senden
-                    actionButton("send_button", "direkt Senden", class = "btn-success", style = "width: 120px; margin-left: 10px;")
+                    class = "text-right", # Rechtsausrichtung mit BS4-Klasse
+                    actionButton("del_button", "löschen", class = "btn-primary action-btn"),
+                    actionButton("edi_button", "bearbeiten", class = "btn-primary action-btn"),
+                    actionButton("send_button", "direkt Senden", class = "btn-success action-btn")
                   )
                 )
               ),
-              # Füge einen vertikalen Abstand ein
-              br(),
               
-              #### Bereich zur Anzeige der E-Mail ----
-              # Eingabefeld für den E-Mail-Empfänger
-              textInput("email_empfaenger", "Empfänger (E-Mail-Adresse)", width = "100%"),
-              # Eingabefeld für den E-Mail-Betreff
-              textInput("email_betreff", "Betreff", width = "100%"),
-              # Bereich zur Anzeige des HTML-E-Mail-Bodys
-              htmlOutput(
-                "email_body_html", 
-                container = span,
-                style = "
-                  display: block; 
-                  width: 100%; 
-                  height: 480px; 
-                  border: 1px solid #ced4da; 
-                  padding: 10px; 
-                  background-color: white; 
-                  overflow-y: auto;
-                "
+              # E-Mail-Formular mit konsistentem Styling
+              div(
+                style = "margin-top: 15px;",
+                textInput("email_empfaenger", "Empfänger (E-Mail-Adresse)", width = "100%"),
+                textInput("email_betreff", "Betreff", width = "100%"),
+                div(
+                  htmlOutput("email_body_html"),
+                  class = "email-preview"
+                )
               )
             )
           )
         )
       ),
       
-      ### Tab E-Mails ----
+      ### Tab E-Mails
       tabPanel(
         "E-Mails",
-        # Füge einen oberen Rand hinzu
-        fluidRow(style = "margin-top: 10px;",
+        fluidRow(
+          style = "margin-top: 10px;",
           box(
             title = "E-Mail-Details",
             width = 12,
-            # Box ist nicht einklappbar
             collapsible = FALSE,
             class = "white",
             
-            #### Buttons ----
-            fluidRow(
-              column(
-                width = 12,
-                # Füge einen unteren Abstand hinzu
-                style = "margin-bottom: 10px;", 
-                # Button zum Hinzufügen eines neuen Eintrags
-                actionButton("add_entry", "Neuer Eintrag", class = "btn-primary"),
-                # Button zum Bearbeiten eines Eintrags
-                actionButton("edit_entry", "Eintrag bearbeiten", class = "btn-primary"),
-                # Button zum Löschen eines Eintrags
-                actionButton("delete_entry", "Eintrag löschen", class = "btn-primary")
-              )
+            # Aktionsbuttons mit einheitlichem Styling
+            div(
+              class = "mb-3", # Margin-Bottom mit BS4-Klasse
+              actionButton("add_entry", "Neuer Eintrag", class = "btn-primary table-btn"),
+              actionButton("edit_entry", "Eintrag bearbeiten", class = "btn-primary table-btn"),
+              actionButton("delete_entry", "Eintrag löschen", class = "btn-primary table-btn")
             ),
             
-            #### Tabelle ----
-            # Tabelle zur Anzeige der E-Mails
+            # Datentabelle
             DTOutput("email_table")
           )
         )
@@ -682,178 +622,165 @@ ui <- bs4DashPage(
   )
 )
 
-# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
-# ----                              SERVER                                  ----
-# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 server <- function(input, output, session) {
   
-  # E-Mail-Daten laden ----
-  # E-Mail-Daten aus Datei laden und reaktiv speichern
+  # Initialisiere reaktive Werte mit Cache
+  # Lädt E-Mail-Daten einmalig und speichert sie reaktiv
   kontaktdaten <- reactiveVal(load_email_data())
   
-  # CSV-Liste einlesen ----
-  # Liste der CSV-Dateien beim Start einlesen und reaktiv speichern
+  # Lädt CSV-Dateien einmalig und speichert sie reaktiv
   csv_files <- reactiveVal(get_csv_files())
   
-  # Buttons index initialisieren ----
-  # Reaktiver Wert für den aktuellen Index der angezeigten Daten (startet bei 1)
+  # Speichert den aktuellen Index der angezeigten Daten (startet bei 1)
   current_index <- reactiveVal(1)
   
-  # Email Body content initialisieren ----
-  # Reaktiver Wert für den Inhalt des E-Mail-Bodys (initial leer)
+  # Speichert den Inhalt des E-Mail-Bodys (initial leer)
   email_body_content <- reactiveVal("")
   
-  # Reaktiver Wert für den globalen Monatszeitraum (als Klartext, initial leer)
+  # Speichert den Monatszeitraum als Text (initial leer)
   monate_final_plain <- reactiveVal("")
   
-  # Reaktiver Wert für die Höhe des Plots (initial 75 Pixel)
+  # Speichert die Höhe des Plots in Pixel (initial 75px)
   plot_height <- reactiveVal(75)
+  
+  # Speichert die aktuell ausgewählte Datei (initial NULL)
+  current_file <- reactiveVal(NULL)
+  
+  # Erstellt einen Cache für extrahierte MSB-Namen um wiederholte Berechnungen zu vermeiden
+  msb_name_cache <- reactiveValues(names = list())
+  
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                        HILFSFUNKTIONEN                            ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  # Extrahiert den MSB-Namen aus einem Dateinamen mit Caching
+  get_cached_msb_name <- function(filename) {
+    # Prüfe ob der MSB-Name bereits im Cache existiert
+    if (is.null(msb_name_cache$names[[filename]])) {
+      # Falls nicht, berechne ihn und speichere ihn im Cache
+      msb_name_cache$names[[filename]] <- extract_msb_name(filename)
+    }
+    # Gib den MSB-Namen aus dem Cache zurück
+    return(msb_name_cache$names[[filename]])
+  }
+  
+  # Funktion zum Aktualisieren nach Verschieben einer CSV-Datei
+  update_after_csv_move <- function() {
+    # Aktualisiere die Liste der CSV-Dateien
+    csv_files(get_csv_files())
+    
+    # Setze den Cache für MSB-Namen zurück
+    msb_name_cache$names <- list()
+    
+    # Überprüfe, ob noch gefilterte Dateien vorhanden sind
+    if (length(filtered_files()) == 0) {
+      # Wenn keine Dateien mehr vorhanden sind, zeige eine Benachrichtigung
+      showNotification(
+        "Keine weiteren Dateien entsprechen den Filterkriterien.",
+        type = "warning",
+        duration = 5
+      )
+    }
+  }
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                            FILTER                                  ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  ## MSB Typ ---- 
+  # Filtert die CSV-Dateien nach den ausgewählten Kriterien
   filtered_files <- reactive({
     # Stelle sicher, dass die Liste der CSV-Dateien geladen ist
     req(csv_files())
-    # Hole die aktuelle Liste der CSV-Dateien
     files <- csv_files()
     
-    # Filter nach dem ausgewählten MSB-Typ (wMSB oder gMSB)
+    # Filter nach MSB-Typ (wMSB oder gMSB)
     if (input$msb_type != "alle") {
-      # Behalte nur Dateien, deren Name den ausgewählten Typ enthält
       files <- files[str_detect(basename(files), fixed(input$msb_type))]
     }
     
-    # Filter zusätzlich nach dem ausgewählten MSB-Namen (aus Dropdown)
+    # Filter nach MSB-Namen aus Dropdown
     if (!is.null(input$file_filter) && input$file_filter != "Alle" && nzchar(input$file_filter)) {
-      # Behalte nur Dateien, deren Name den ausgewählten Filter enthält
       files <- files[str_detect(basename(files), fixed(input$file_filter))]
     }
-    # Gib die gefilterte Liste der Dateien zurück
+    
     return(files)
   })
   
+  # Extrahiert eindeutige MSB-Namen aus den gefilterten Dateien
+  filtered_msb_names <- reactive({
+    req(filtered_files())
+    # Extrahiere MSB-Namen mit Cache-Funktion
+    sapply(basename(filtered_files()), get_cached_msb_name) |> unique()
+  })
   
-  # Beobachte Änderungen am MSB-Typ-Auswahlfeld
+  # Setzt die Dateifilter-Auswahl zurück, wenn sich der MSB-Typ ändert
   observeEvent(input$msb_type, {
-    # Wenn der MSB-Typ geändert wird, setze die Dateifilter-Auswahl zurück auf "Alle"
     updateSelectInput(session, "file_filter", selected = "Alle")
   })
   
-  
-  ## Beobachte Änderungen an der Liste der CSV-Dateien und dem MSB-Typ ----
+  # Aktualisiert die Dropdown-Optionen für MSB-Namen
   observe({
-    # Stelle sicher, dass die Liste der CSV-Dateien geladen ist
     req(csv_files())
-    # Hole die aktuelle Liste der CSV-Dateien
     files <- csv_files()
     
-    # Filtere die Dateien basierend auf dem ausgewählten MSB-Typ
     if (input$msb_type != "alle") {
       files <- files[str_detect(basename(files), fixed(input$msb_type))]
     }
     
-    # Extrahiere die MSB-Namen aus den gefilterten Dateinamen
-    msb_names <- extract_msb_name(basename(files))
+    # Extrahiere MSB-Namen mit Cache-Funktion für bessere Performance
+    msb_names <- sapply(basename(files), get_cached_msb_name) |> unique() |> sort()
     
-    # Führe die Aktualisierung des Dropdowns isoliert aus
+    # Aktualisiere das Dropdown-Menü, behalte die Auswahl wenn möglich
     isolate({
-      # Überprüfe, ob der aktuelle Filterwert noch in den neuen MSB-Namen vorhanden ist
-      if (!(input$file_filter %in% msb_names)) {
-        # Wenn nicht, setze die Dropdown-Auswahl auf "Alle" und aktualisiere die Optionen
-        updateSelectInput(
-          session,
-          "file_filter",
-          choices = c("Alle", sort(unique(msb_names))),
-          selected = "Alle"
-        )
-      } else {
-        # Wenn ja, behalte den aktuellen Filterwert bei und aktualisiere nur die Optionen
-        updateSelectInput(
-          session,
-          "file_filter",
-          choices = c("Alle", sort(unique(msb_names))),
-          selected = input$file_filter
-        )
-      }
+      current_filter <- input$file_filter
+      updateSelectInput(
+        session,
+        "file_filter",
+        choices = c("Alle", msb_names),
+        selected = if (current_filter %in% c("Alle", msb_names)) current_filter else "Alle"
+      )
     })
-  })
-  
-  
-  ## MSB Name reaktive Liste ----
-  filtered_msb_names <- reactive({
-    # Stelle sicher, dass die Liste der CSV-Dateien geladen ist
-    req(csv_files())
-    # Nimm die Dateinamen (ohne Pfad) aller CSV-Dateien
-    file_names <- basename(csv_files())
-    # Extrahiere alle eindeutigen MSB-Namen aus diesen Dateinamen
-    extract_msb_name(file_names) 
   })
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                             PLOT                                   ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  # Eindeutige MSB-Namen einmalig ermitteln ----
-  max_unique_msb <- reactive({
-    # Rufe die Liste aller CSV-Dateien ab
-    all_csv_files <- get_csv_files()
-    # Extrahiere alle MSB-Namen aus allen Dateinamen
-    all_msb_names <- unlist(lapply(all_csv_files, function(file) {
-      extract_msb_name(basename(file))
-    }))
-    # Gib die Anzahl der eindeutigen MSB-Namen zurück
-    length(unique(all_msb_names))
-  })
-  
-  # Plot Höhe aktualisieren ---
+  # Aktualisiert die Plot-Höhe basierend auf der Anzahl der MSBs
   update_plot_height <- function() {
-    # Stelle sicher, dass die gefilterten Dateien vorhanden sind
     req(filtered_files())
-    # Hole die Liste der gefilterten Dateien
-    files <- filtered_files()
-    # Extrahiere die MSB-Namen aus den gefilterten Dateinamen
-    msb_names <- extract_msb_name(basename(files))
-    # Zähle die eindeutigen MSB-Namen in den gefilterten Dateien
-    unique_msb_count <- length(unique(msb_names))
-    # Definiere eine Standard-Balkenhöhe für den Plot
-    balken_hoehe <- 35
-    # Definiere den Platz für die Achsenbeschriftungen
-    achsen_platz <- 50
-    # Definiere eine maximale Höhe für den Plot, bevor Scrollen nötig wird
-    max_plot_hoehe <- 583 
     
-    # Berechne die benötigte Höhe basierend auf der Anzahl der Balken
+    # Zähle eindeutige MSB-Namen in gefilterten Dateien
+    unique_msb_count <- length(filtered_msb_names())
+    
+    # Definiere Parameter für die Plotgröße
+    balken_hoehe <- 25
+    achsen_platz <- 50
+    max_plot_hoehe <- 583
+    
+    # Berechne optimale Plot-Höhe
     benoetigte_hoehe <- (unique_msb_count * balken_hoehe) + achsen_platz
-    # Wähle die kleinere Höhe zwischen der benötigten und der maximalen Höhe
     tatsaechliche_hoehe <- min(benoetigte_hoehe, max_plot_hoehe)
     
-    # Speichere die tatsächliche Höhe in der reaktiven Variable plot_height
     plot_height(tatsaechliche_hoehe)
   }
   
-  # Beobachte Änderungen an der gefilterten Dateiliste
+  # Aktualisiere Plot-Höhe wenn sich die gefilterte Dateiliste ändert
   observeEvent(filtered_files(), {
-    # Wenn die gefilterte Dateiliste sich ändert, aktualisiere die Plot-Höhe
     update_plot_height()
   })
-
-  # Erstelle einen Container für den Plot mit dynamischer Höhe
+  
+  # Erstellt einen Container für den Plot mit dynamischer Höhe
   output$plot_ui <- renderUI({
     div(
       class = "plot-container",
-      # Setze die Höhe des plotOutput dynamisch basierend auf plot_height()
       plotOutput("plot_msb", height = paste0(plot_height(), "px"))
     )
   })
   
   # Rendert den MSB-Plot
   output$plot_msb <- renderPlot({
-    # Stelle sicher, dass die gefilterten Dateien vorhanden sind
     req(filtered_files())
-    # Rufe die Funktion zum Erstellen des MSB-Plots mit den gefilterten Dateien auf
     msb_plot(filtered_files())
   })
   
@@ -861,235 +788,32 @@ server <- function(input, output, session) {
   # ----                          HAUPTABELLE                               ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  ## Daten aktualisieren ----
-  ### Aktuell ausgewählte Datei ----
-  # Reaktiver Wert zur Speicherung der aktuell ausgewählten Datei (initial NULL)
-  current_file <- reactiveVal(NULL)
-  
-  # Beobachte Änderungen in der gefilterten Dateiliste und wähle die erste Datei aus
+  # Beobachte Änderungen in der gefilterten Dateiliste und wähle die erste Datei
   observe({
-    # Stelle sicher, dass gefilterte Dateien vorhanden sind
     req(filtered_files())
-    # Setze die aktuell ausgewählte Datei auf die erste in der gefilterten Liste
-    current_file(filtered_files()[1])
+    if (length(filtered_files()) > 0) {
+      current_file(filtered_files()[1])
+      current_index(1)  # Setze den Index zurück
+    } else {
+      current_file(NULL)
+    }
   })
   
-  ### MSB-Name aus aktueller Datei extrahieren ----
-  # Reaktiver Wert, der den MSB-Namen der aktuell ausgewählten Datei enthält
+  # Extrahiert den MSB-Namen der aktuell ausgewählten Datei
   current_msb <- reactive({
-    # Stelle sicher, dass eine aktuelle Datei ausgewählt ist
     req(current_file())
-    # Extrahiere den MSB-Namen aus dem Dateinamen
-    basename(current_file()) |> extract_msb_name()
+    get_cached_msb_name(basename(current_file()))
   })
   
-  ### MSB-Kontakt aus Email ----
-  # Reaktiver Wert, der die Kontaktdaten des aktuellen MSB enthält
+  # Findet die Kontaktdaten des aktuellen MSB
   current_contact <- reactive({
-    # Stelle sicher, dass die Kontaktdaten geladen und ein MSB vorhanden ist
-    req(kontaktdaten())
-    req(current_msb())
+    req(kontaktdaten(), current_msb())
     
-    # Filter die Kontaktdaten nach dem aktuellen MSB-Namen
     kontaktdaten() |> 
       filter(MSB == current_msb()) |> 
-      # Nimm den ersten Eintrag, falls mehrere gefunden werden
-      slice(1)  
+      slice(1)  # Nimm den ersten Eintrag, falls mehrere gefunden werden
   })
   
-  ### Eingabefelder aktualisieren ----
-  # Beobachte Änderungen in den Kontaktdaten des aktuellen MSB
-  observe({
-    # Hole die Kontaktdaten des aktuellen MSB
-    contact <- current_contact()
-    
-    # Überprüfe, ob Kontaktdaten gefunden wurden
-    if (nrow(contact) > 0) {
-      #### Extrahiere den Monatszeitraum aus den aktuellen CSV-Datenn ----
-      monate_plain <- extract_monate(current_csv_data())
-      # Speichere den Monatszeitraum im reaktiven Wert
-      monate_final_plain(monate_plain)  
-      
-      # Setze die E-Mail-Adresse des Empfängers im Eingabefeld
-      updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
-      
-      # Hole den Dateinamen der aktuellen Datei
-      filename <- basename(current_file())
-      # Extrahiere die VNB-Kennung aus dem Dateinamen
-      vnb <- extract_vnb(filename)
-      # Hole den Namen des aktuellen MSB
-      msb_name <- current_msb()
-      
-      # Erstelle den Betreff der E-Mail
-      betreff_text <- paste0(
-        "Fehlende Lastgangdaten im ", monate_final_plain(), ".    MSB ", msb_name, " für VNB ", vnb
-      )
-      
-      # Aktualisiere das Eingabefeld für den Betreff
-      updateTextInput(session, "email_betreff", value = betreff_text)
-      
-      # Generiere den HTML-Inhalt des E-Mail-Bodys
-      body_html <- generate_email_body(current_csv_data(), contact, monate_final_plain()) 
-      
-      # Rendere den HTML-Inhalt im Ausgabebereich
-      output$email_body_html <- renderUI({
-        HTML(body_html)
-      })
-      # Speichere den HTML-Inhalt im reaktiven Wert
-      email_body_content(body_html)
-    } else {
-      # Kein Kontakt
-      # Erstelle eine Hinweismeldung für fehlende Kontaktdaten
-      missing_msb_html <- paste0(
-        "<b>Hinweis:</b> Kein Eintrag in den E-Mail Kontakten für MSB <b>", current_msb(), "</b> vorhanden."
-      )
-      
-      # Leere die Eingabefelder für Empfänger und Betreff
-      updateTextInput(session, "email_empfaenger", value = "")
-      updateTextInput(session, "email_betreff", value = "")
-      
-      # Zeige die Hinweismeldung im E-Mail-Body-Bereich an
-      output$email_body_html <- renderUI({
-        HTML(missing_msb_html)
-      })
-    }
-  })
-  
-  # TODO hier gehts weiter
-  ## Buttons ----
-  observe({
-    req(filtered_files())
-    idx <- current_index()
-    
-    # Sicherstellen, dass der Index gültig ist
-    if (idx >= 1 && idx <= length(filtered_files())) {
-      current_file(filtered_files()[idx])
-    }
-  })
-  
-  ### Button: Zurück ----
-  observeEvent(input$back_button, {
-    idx <- current_index()
-    
-    if (idx > 1) {
-      current_index(idx - 1)
-    }
-  })
-  
-  ### Button: nächster ----
-  observeEvent(input$next_button, {
-    idx <- current_index()
-    max_idx <- length(filtered_files())
-    
-    if (idx < max_idx) {
-      current_index(idx + 1)
-    }
-  })
-  
-  ### Button: löschen ----
-  observeEvent(input$del_button, {
-    idx <- current_index()
-    max_idx <- length(filtered_files())
-    
-    showNotification(
-      "CSV-Datei gelöscht.",
-      type = "message",
-      duration = 3,
-      closeButton = TRUE,
-    )
-    
-    # CSV verschieben
-    move_csv_to_done(current_file())
-    # --- Update nach Verschieben
-    
-    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
-    
-    # Index erhöhen
-    if (idx < max_idx) {
-      current_index(idx + 1)
-    }
-  })
-  
-  ### Button: bearbeiten ----
-  observeEvent(input$edi_button, {
-    idx <- current_index()
-    max_idx <- length(filtered_files())
-    
-    # Neuen Body zusammenbauen
-    final_body <- paste0(
-      email_body_content(),
-      "<br><br>",
-      signatur_html()
-    )
-    
-    # E-Mail zur Bearbeitung öffnen
-    sende_mail_outlook(
-      empfaenger = input$email_empfaenger,
-      betreff    = input$email_betreff,
-      body_html  = final_body,
-      direktversand = FALSE  # <<--- WICHTIG!
-    )
-    
-    showNotification(
-      "E-Mail zur Bearbeitung geöffnet.",
-      type = "message",
-      duration = 3,
-      closeButton = TRUE,
-    )
-    
-    # CSV verschieben
-    move_csv_to_done(current_file())
-    
-    # --- Update nach Verschieben
-    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
-
-    # Index erhöhen
-    if (idx < max_idx) {
-      current_index(idx + 1)
-    }
-  })
-  
-  
-  ### Button: Senden ----
-  observeEvent(input$send_button, {
-    idx <- current_index()
-    max_idx <- length(filtered_files())
-    
-    # Neuen Body zusammenbauen:
-    final_body <- paste0(
-      email_body_content(),  # der Hauptteil (Anrede, Einleitung, Tabelle)
-      "<br><br>",            # kleiner Abstand
-      signatur_html()        # DEINE Signatur unten dran
-    )
-    
-    # E-Mail senden
-    sende_mail_outlook(
-      empfaenger = input$email_empfaenger,
-      betreff    = input$email_betreff,
-      body_html  = final_body,
-      direktversand = TRUE  # <<--- WICHTIG!
-    )
-    
-    showNotification(
-      "E-Mail an Outlook übergeben.",
-      type = "message",    # oder "default"
-      duration = 3,        # Sekunden sichtbar
-      closeButton = TRUE,  # Nutzer kann es auch selbst wegklicken
-    )
-    
-    # CSV verschieben
-    move_csv_to_done(current_file())
-    
-    # --- Update nach Verschieben
-    update_after_csv_move(session, csv_files, input$msb_type, input$file_filter)
-
-    # Index erhöhen
-    if (idx < max_idx) {
-      current_index(idx + 1)
-    }
-  })
-  
-  ## Tabelle laden ----
   # Inhalt der aktuellen CSV-Datei einlesen
   current_csv_data <- reactive({
     req(current_file())
@@ -1102,69 +826,253 @@ server <- function(input, output, session) {
         show_col_types = FALSE
       )
     }, error = function(e) {
-      # Falls beim Einlesen ein Fehler auftritt, gib eine leere Tabelle zurück
-      tibble(Fehler = "Konnte CSV nicht laden.")
+      # Bei Fehler gib eine informative Tabelle zurück
+      tibble(Fehler = paste("Fehler beim Laden der CSV:", e$message))
     })
+  })
+  
+  # Aktualisiere UI-Elemente basierend auf Kontaktdaten
+  observe({
+    contact <- current_contact()
+    
+    # Prüfe ob aktuelle CSV-Daten verfügbar sind
+    csv_data_available <- !is.null(current_csv_data()) && 
+      !"Fehler" %in% names(current_csv_data())
+    
+    if (nrow(contact) > 0 && csv_data_available) {
+      # Extrahiere den Monatszeitraum aus den CSV-Daten
+      monate_plain <- extract_monate(current_csv_data())
+      monate_final_plain(monate_plain)
+      
+      # Setze E-Mail-Empfänger
+      updateTextInput(session, "email_empfaenger", value = contact$EMAIL)
+      
+      # Extrahiere Informationen für den Betreff
+      filename <- basename(current_file())
+      vnb <- extract_vnb(filename)
+      msb_name <- current_msb()
+      
+      # Erstelle Betreff
+      betreff_text <- paste0(
+        "Fehlende Lastgangdaten im ", monate_final_plain(), ".    MSB ", msb_name, " für VNB ", vnb
+      )
+      updateTextInput(session, "email_betreff", value = betreff_text)
+      
+      # Generiere E-Mail-Body
+      body_html <- generate_email_body(current_csv_data(), contact, monate_final_plain())
+      output$email_body_html <- renderUI({
+        HTML(body_html)
+      })
+      email_body_content(body_html)
+    } else {
+      # Kein Kontakt oder CSV-Fehler
+      missing_reason <- if (nrow(contact) == 0) {
+        paste0("Kein Eintrag in den E-Mail Kontakten für MSB <b>", current_msb(), "</b> vorhanden.")
+      } else {
+        "CSV-Datei konnte nicht eingelesen werden."
+      }
+      
+      missing_html <- paste0("<b>Hinweis:</b> ", missing_reason)
+      
+      # Leere Eingabefelder
+      updateTextInput(session, "email_empfaenger", value = "")
+      updateTextInput(session, "email_betreff", value = "")
+      
+      # Zeige Hinweis
+      output$email_body_html <- renderUI({
+        HTML(missing_html)
+      })
+    }
+  })
+  
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  # ----                          BUTTONS                                   ----
+  # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
+  
+  # Aktualisiert die ausgewählte Datei basierend auf dem aktuellen Index
+  observe({
+    req(filtered_files())
+    idx <- current_index()
+    
+    # Stelle sicher, dass der Index gültig ist
+    if (idx >= 1 && idx <= length(filtered_files())) {
+      current_file(filtered_files()[idx])
+    }
+  })
+  
+  # Button: Zurück
+  observeEvent(input$back_button, {
+    idx <- current_index()
+    
+    if (idx > 1) {
+      current_index(idx - 1)
+    }
+  })
+  
+  # Button: Nächster
+  observeEvent(input$next_button, {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    if (idx < max_idx) {
+      current_index(idx + 1)
+    }
+  })
+  
+  # Gemeinsame Funktion für das Behandeln von Datei-Aktionen (Löschen/E-Mail)
+  handle_file_action <- function(action_type, show_message) {
+    idx <- current_index()
+    max_idx <- length(filtered_files())
+    
+    # Zeige Benachrichtigung
+    showNotification(
+      show_message,
+      type = "message",
+      duration = 3,
+      closeButton = TRUE
+    )
+    
+    # CSV verschieben
+    move_csv_to_done(current_file())
+    
+    # Update nach Verschieben
+    update_after_csv_move()
+    
+    # Index anpassen für nächste Datei
+    if (length(filtered_files()) > 0 && idx <= length(filtered_files())) {
+      # Behalte aktuellen Index wenn möglich
+      current_index(idx)
+    } else if (length(filtered_files()) > 0) {
+      # Wenn der aktuelle Index zu hoch ist, gehe zum letzten Element
+      current_index(length(filtered_files()))
+    }
+  }
+  
+  # Button: Löschen
+  observeEvent(input$del_button, {
+    handle_file_action("delete", "CSV-Datei gelöscht.")
+  })
+  
+  # Button: E-Mail bearbeiten
+  observeEvent(input$edi_button, {
+    # Neuen Body zusammenbauen
+    final_body <- paste0(
+      email_body_content(),
+      "<br><br>",
+      signatur_html()
+    )
+    
+    # E-Mail zur Bearbeitung öffnen
+    sende_mail_outlook(
+      empfaenger = input$email_empfaenger,
+      betreff    = input$email_betreff,
+      body_html  = final_body,
+      direktversand = FALSE
+    )
+    
+    handle_file_action("edit", "E-Mail zur Bearbeitung geöffnet.")
+  })
+  
+  # Button: E-Mail senden
+  observeEvent(input$send_button, {
+    # Neuen Body zusammenbauen
+    final_body <- paste0(
+      email_body_content(),
+      "<br><br>",
+      signatur_html()
+    )
+    
+    # E-Mail senden
+    sende_mail_outlook(
+      empfaenger = input$email_empfaenger,
+      betreff    = input$email_betreff,
+      body_html  = final_body,
+      direktversand = TRUE
+    )
+    
+    handle_file_action("send", "E-Mail an Outlook übergeben.")
   })
   
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   # ----                            E-MAIL                                  ----
   # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---#
   
-  ## E-Mail Tabelle ----
+  # E-Mail-Tabelle rendern
   output$email_table <- renderDT({
-    req(kontaktdaten())  # Sicherstellen, dass Daten geladen sind
+    req(kontaktdaten())
     
     datatable(
       kontaktdaten(),
-      #escape = FALSE,
       selection = "single",
       options = list(
-        # Deaktiviert horizontales Scrollen
         scrollX = FALSE,
-        # Setzt die Höhe der Tabelle dynamisch basierend auf der Fensterhöhe
         scrollY = "calc(100vh - 300px)",
-        # Zeigt alle Einträge auf einer Seite an
         pageLength = -1,
-        # Zeigt nur die Tabelle selbst an (keine Suchfelder etc.)
         dom = 't',
-        # Spaltenbreite festlegen
         autoWidth = FALSE, 
         columnDefs = list(
           list(width = '15%', targets = 0), # MSB
           list(width = '15%', targets = 1), # EMAIL
           list(width = '20%', targets = 2), # ANREDE
           list(width = '50%', targets = 3)  # EINLEITUNG
-          #list(className = 'dt-body-wrap', targets = 3)
         )
       ),
       rownames = FALSE 
     )
   })
   
-  ## E-Mail neu ----
+  # Funktion für E-Mail-Kontakt-Management
+  handle_email_contacts <- function(action_type) {
+    if (action_type == "new") {
+      # Neuen Eintrag hinzufügen
+      data <- kontaktdaten()
+      new_row <- tibble(
+        MSB        = input$modal_msb,
+        EMAIL      = input$modal_email,
+        ANREDE     = input$modal_anrede,
+        EINLEITUNG = input$modal_einleitung
+      )
+      updated <- bind_rows(data, new_row)
+      kontaktdaten(updated)
+      save_email_data(kontaktdaten())
+      toast("Neuer Eintrag erfolgreich gespeichert!")
+    } else if (action_type == "edit") {
+      # Eintrag bearbeiten
+      sel <- input$email_table_rows_selected
+      data <- kontaktdaten()
+      data[sel, ] <- tibble(
+        MSB        = input$modal_msb,
+        EMAIL      = input$modal_email,
+        ANREDE     = input$modal_anrede,
+        EINLEITUNG = input$modal_einleitung
+      )
+      kontaktdaten(data)
+      save_email_data(kontaktdaten())
+      toast("Eintrag erfolgreich aktualisiert!")
+    } else if (action_type == "delete") {
+      # Eintrag löschen
+      sel <- input$email_table_rows_selected
+      data <- kontaktdaten()
+      updated_data <- data[-sel, ]
+      kontaktdaten(updated_data)
+      save_email_data(kontaktdaten())
+      toast("Eintrag erfolgreich gelöscht!")
+    }
+    
+    removeModal()
+  }
+  
+  # E-Mail neu
   observeEvent(input$add_entry, {
     showModal(entry_modal("new"))
   })
   
-  ## E-Mail neu speichern ----
+  # E-Mail neu speichern
   observeEvent(input$save_new_entry, {
-    data <- kontaktdaten()
-    new_row <- tibble(
-      MSB        = input$modal_msb,
-      EMAIL      = input$modal_email,
-      ANREDE     = input$modal_anrede,
-      EINLEITUNG = input$modal_einleitung
-    )
-    updated <- bind_rows(data, new_row)
-    kontaktdaten(updated)
-    save_email_data(kontaktdaten())
-    removeModal()
-    show_success_toast("Neuer Eintrag erfolgreich gespeichert!")
+    handle_email_contacts("new")
   })
   
-  
-  ## E-Mail bearbeiten ----
+  # E-Mail bearbeiten
   observeEvent(input$edit_entry, {
     sel <- input$email_table_rows_selected
     if (length(sel) == 0) {
@@ -1175,65 +1083,30 @@ server <- function(input, output, session) {
     }
   })
   
-  ## E-Mail bearbeiten speichern ----
+  # E-Mail bearbeitet speichern
   observeEvent(input$save_edit_entry, {
-    sel <- input$email_table_rows_selected
-    data <- kontaktdaten()
-    data[sel, ] <- tibble(
-      MSB        = input$modal_msb,
-      EMAIL      = input$modal_email,
-      ANREDE     = input$modal_anrede,
-      EINLEITUNG = input$modal_einleitung
-    )
-    kontaktdaten(data)
-    save_email_data(kontaktdaten())
-    removeModal()
-    show_success_toast("Eintrag erfolgreich aktualisiert!")
+    handle_email_contacts("edit")
   })
   
-  ## E-Mail löschen ----
+  # E-Mail löschen
   observeEvent(input$delete_entry, {
-    # Holen der ausgewählten Zeile
-    selected_row <- input$email_table_rows_selected
-    
-    if (length(selected_row) == 0) {
+    if (length(input$email_table_rows_selected) == 0) {
       showModal(modalDialog(
         title = "Hinweis",
         "Bitte wähle zuerst einen Eintrag aus, den du löschen möchtest.",
         easyClose = TRUE
       ))
     } else {
-      # Aktuelle Daten
-      data <- kontaktdaten()
-      
-      # Löschen der ausgewählten Zeile
-      updated_data <- data[-selected_row, ]
-      
-      # Update reactive Value
-      kontaktdaten(updated_data)
-      
-      # Speicherung
-      save_email_data(kontaktdaten())
-      
-      show_success_toast("Eintrag erfolgreich gelöscht!")
+      handle_email_contacts("delete")
     }
   })
   
-  
-  
-
-  
-
-  
-
-  
-
-  # Wenn die Sitzung endet, beende die App  
-  session$onSessionEnded(function() { 
-    # Beendet die Shiny-Anwendung wenn der Browser geschlossen wird
+  # Beende die App, wenn die Sitzung endet
+  session$onSessionEnded(function() {
     stopApp()
   })
 }
+
 
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 #                            *** APP STARTEN ***                            ----

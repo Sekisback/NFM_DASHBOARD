@@ -1,53 +1,25 @@
-/* Container für die Tabelle erstellen */
+/* ========================================
+   1. GRUNDLEGENDE LAYOUTELEMENTE
+   ======================================== */
+
+/* Verhindert Scrollen auf Hauptseite */
 body, .content-wrapper {
-  /* Scrollen der Seite verhindern */
   overflow: hidden;
   height: 100vh;
 }
 
-/* Containerhöhe für Tabelle festlegen */
+/* ========================================
+   2. CONTAINER & CARDS
+   ======================================== */
+
+/* Container für Tabellen und Inhalte */
 #table-container {
-  height: calc(100vh - 160px); 
+  height: calc(100vh - 160px);
 }
 
-/* Erzwingt, dass die Tabelle linksbündig bleibt */
-.dataTables_wrapper {
-  overflow-x: auto;
-  overflow-y: auto;
-  margin-left: 0 !important; 
-}
-
-
-/* Versteckt das Pushmenu-Icon */
-.navbar-nav .nav-item .nav-link[data-widget='pushmenu'] {
-  display: none !important;
-}
-
-/* Stelle sicher, dass die Navbar-Höhe stabil bleibt */
-.main-header .navbar {
-    height: 50px !important; /* Standard-Höhe erzwingen */
-    display: flex !important;
-    align-items: center !important; /* Vertikale Zentrierung */
-}
-
-
-/* Padding in der äußeren col-sm-12 innerhalb der linken Spalte reduzieren */
-.messstellenbetreiber-box-parent {
-  padding-left: 1px !important;
-}
-
-/* Radiobutton-Gruppe: Margin-Top zurücksetzen */
-/* Radiobutton-Labels leicht schöner machen */
-.shiny-options-group {
-  margin-top: 0px !important;
-  line-height: 1.5;
-  padding-bottom: 2px;
-  font-size: 0.9rem;
-}
-
-/* card-body Höhe */
+/* Card-Styling */
 .card-body {
-  height: calc(100vh - 160px); 
+  height: calc(100vh - 160px);
   background-color: #aaa;
 }
 
@@ -55,18 +27,95 @@ body, .content-wrapper {
   background-color: #aaa;
 }
 
+/* Weiße Varianten für Cards */
 .card-body.white,
 .card-header.white {
   background-color: white;
 }
 
+/* Plot-Container für Diagramme */
 .plot-container {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end; /* <- Inhalt am unteren Ende ausrichten */
+  justify-content: flex-end;
   height: 583px;
   border: 1px solid #ccc;
   padding: 10px;
   background-color: white;
-  overflow: hidden; /* keine unnötigen Scrollbars */
+  overflow: hidden;
+}
+
+/* ========================================
+   3. NAVIGATION & HEADER
+   ======================================== */
+
+/* Navbar-Einstellungen */
+.main-header .navbar {
+  height: 50px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* Versteckt das Pushmenu-Icon */
+.navbar-nav .nav-item .nav-link[data-widget='pushmenu'] {
+  display: none !important;
+}
+
+/* ========================================
+   4. BUTTONS & INTERAKTIONSELEMENTE
+   ======================================== */
+
+/* Button-Größen und Abstände */
+.nav-btn, 
+.action-btn {
+  width: 120px;
+}
+
+.nav-btn + .nav-btn,
+.action-btn + .action-btn,
+.table-btn + .table-btn {
+  margin-left: 10px;
+}
+
+/* ========================================
+   5. FORMULARE & INPUT-ELEMENTE 
+   ======================================== */
+
+/* Radiobutton-Gruppe optimieren */
+.shiny-options-group {
+  margin-top: 0 !important;
+  line-height: 1.5;
+  padding-bottom: 2px;
+  font-size: 0.9rem;
+}
+
+/* ========================================
+   6. TABELLEN & DATENDARSTELLUNG
+   ======================================== */
+
+/* DataTables-Wrapper konsistent halten */
+.dataTables_wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  margin-left: 0 !important;
+}
+
+/* ========================================
+   7. CUSTOM KOMPONENTEN
+   ======================================== */
+
+/* Messstellenbetreiber-Box anpassen */
+.messstellenbetreiber-box-parent {
+  padding-left: 1px !important;
+}
+
+/* E-Mail-Vorschau-Bereich */
+.email-preview {
+  display: block;
+  width: 100%;
+  height: 480px;
+  border: 1px solid #ced4da;
+  padding: 10px;
+  background-color: white;
+  overflow-y: auto;
 }
