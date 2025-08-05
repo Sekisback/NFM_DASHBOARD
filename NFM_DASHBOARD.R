@@ -3,10 +3,11 @@
 # NFM DASHBOARD                                                             ----
 #
 # Author : Sascha Kornberger
-# Datum  : 01.05.2025
-# Version: 0.4.0
+# Datum  : 03.06.2025
+# Version: 0.5.0
 #
 # History:
+# 0.5.0  Funktion: E-Mail Body angepasst
 # 0.4.0  Funktion: Blacklist
 # 0.3.0  Bugfix  : Code Optimierung mit Claude
 # 0.2.1  Bugfix  : Diagramm balkenhöhe aktualisieren
@@ -95,10 +96,10 @@ DONE_DIR <- "done"
 
 # Standardwerte für Modal-Dialoge
 DEFAULT_EINLEITUNG <- paste(
-  "für die unten aufgeführten Marktlokationen wurden, trotz zuvor versendeter ORDERS,", 
+  "für die unten aufgeführten Meldepunkt(e) wurden, trotz zuvor versendeter ORDERS,", 
   "noch keine vollständigen Lastgangdaten empfangen.<br>",
   "Wir möchten Sie daher bitten, die Lastgangdaten für den Monat {MONAT} noch einmal zu versenden.<br>",
-  "Nutzen Sie hierzu bitte die aktuellen MSCONS-Version und die Ihnen bekannte EDIFACT-Adresse."
+  "Nutzen Sie hierzu bitte die aktuelle MSCONS-Version und die Ihnen bekannte EDIFACT-Adresse."
 )
 DEFAULT_ANREDE <- "Sehr geehrte Damen und Herren,"
 
@@ -166,32 +167,38 @@ extract_vnb <- function(filename) {
 extract_monate <- function(df) {
   if (nrow(df) == 0) return("")
   
-  # Bereinige die Spaltennamen und extrahiere Zeitraum
-  monate <- df |> 
+  df <- df |>
     clean_names("all_caps") |>
     select(LUCKE_VON, LUCKE_BIS) |>
     mutate(
-      LUCKE_VON = dmy_hm(LUCKE_VON),
-      LUCKE_BIS = dmy_hm(LUCKE_BIS)
+      LUCKE_VON = parse_date_time(LUCKE_VON, orders = c("d.m.Y H:M", "d.m.Y H:M:S")),
+      LUCKE_BIS = parse_date_time(LUCKE_BIS, orders = c("d.m.Y H:M", "d.m.Y H:M:S"))
     ) |>
-    # Verwende eine einzige pmap-Operation statt map2
+    filter(!is.na(LUCKE_VON), !is.na(LUCKE_BIS))
+  
+  if (nrow(df) == 0) return("Monat nicht ermittelbar")
+  
+  monate <- df |>
     pmap(function(LUCKE_VON, LUCKE_BIS) {
-      seq.Date(
-        from = floor_date(LUCKE_VON, "month"), 
-        to = floor_date(LUCKE_BIS, "month"), 
-        by = "1 month"
+      tryCatch(
+        seq.Date(
+          from = floor_date(as.Date(LUCKE_VON), "month"),
+          to   = floor_date(as.Date(LUCKE_BIS), "month"),
+          by = "month"
+        ),
+        error = function(e) NULL
       )
     }) |>
     unlist() |>
     as.Date(origin = "1970-01-01") |>
     unique() |>
-    sort()  # Stellt sicher, dass die Monate geordnet sind
+    sort()
   
-  # Bereite formatierte Monatsnamen und Jahre vor
+  if (length(monate) == 0) return("Monat nicht ermittelbar")
+  
   monatsnamen <- format(monate, "%B")
   jahre <- format(monate, "%Y")
   
-  # Formatiere Ausgabe basierend auf Anzahl der Monate
   if (length(monate) == 1) {
     return(paste0(monatsnamen[1], " ", jahre[1]))
   } else {
@@ -202,7 +209,6 @@ extract_monate <- function(df) {
     ))
   }
 }
-
 
 # Erstelle Plot als Balkendiagramm mit der Menge der Dateien pro MSB
 msb_plot <- function(file_names) {
@@ -312,7 +318,7 @@ generate_email_body <- function(df, contact, monate_final_plain, blacklist_melde
   # Erstelle HTML für Meldepunkte - mit Fehlerbehandlung falls die Spalte fehlt
   meldepunkte_text <- if ("MELDEPUNKT" %in% names(df)) {
     meldepunkte <- unique(df$MELDEPUNKT)
-    paste0("&nbsp;&nbsp;• ", meldepunkte, collapse = "<br>")
+    paste0(meldepunkte, collapse = "<br>")
   } else {
     "<i>Keine Meldepunkte gefunden</i>"
   }
@@ -332,13 +338,9 @@ signatur_html <- function() {
   
   # Liest die Bilddatei und konvertiert sie in ein Base64-kodiertes URI-Schema 
   logo_eeg <- dataURI(file = "www/images/logo_eeg.png", mime = "image/png")
-  icon_mail <- dataURI(file = "www/images/icon_mail.png", mime = "image/png")
-  icon_www <- dataURI(file = "www/images/icon_www.png", mime = "image/png")
-  icon_address <- dataURI(file = "www/images/icon_address.png", mime = "image/png")
-  icon_leuchtturm <- dataURI(file = "www/images/icon_leuchtturm.png", mime = "image/png")
-  icon_linkedin <- dataURI(file = "www/images/icon_linkedin.png", mime = "image/png")
-  icon_xing <- dataURI(file = "www/images/icon_xing.png", mime = "image/png")
-  icon_instagram <- dataURI(file = "www/images/icon_instagram.png", mime = "image/png")
+  icon_linkedin <- dataURI(file = "www/images/icon_linkedin_bw.png", mime = "image/png")
+  icon_xing <- dataURI(file = "www/images/icon_xing_bw.png", mime = "image/png")
+  icon_instagram <- dataURI(file = "www/images/icon_instagram_bw.png", mime = "image/png")
   
   
   paste0(
@@ -348,83 +350,95 @@ signatur_html <- function() {
     "<br><br>",
     "Vielen Dank und viele Grüße",
     "</div>",
+    # Abstand oben für Tabelle
+    '<div style="margin-top:20px;">',
     
-    # Tabelle mit fixer Zeilenhöhe
-    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt;">',
+    # Signatur-Tabelle mit 15 Zeilen und rowspan für Logo
+    '<table style="
+      width:13cm;
+      border-collapse:collapse;
+      font-family:Arial, sans-serif; 
+      font-size:10pt;
+      ">
+    ',
     
-    # Zeile 1: leer, Logo rechts mit rowspan über 3 Zeilen
-    '<tr style="height:24px;">',
-    "<td></td>",
-    '<td rowspan="3" style="text-align:right; vertical-align:bottom; padding-left:20px;">',
+    # Zeile 1 – Team Energieservice
+    '<tr>',
+    '<td style="width:10cm; font-family:Arial, sans-serif; font-size:11pt; font-weight:bold;">Team Energieservice</td>',
+    '<td rowspan="4" style="text-align:right; vertical-align:top;">',
     '<img src="', logo_eeg, '" style="height:70px;" alt="EEG Logo">',
-    "</td>",
-    "</tr>",
-    
-    # Zeile 2: Team
-    '<tr style="height:24px;">',
-    '<td style="vertical-align:bottom;"><b>Team Energieservice</b></td>',
-    "</tr>",
-    
-    # Zeile 3: Firma
-    '<tr style="height:24px;">',
-    '<td style="vertical-align:bottom;">Energieservice | EEG Energie- Einkaufs- und Service GmbH</td>',
-    "</tr>",
-    "</table>",
-    
-    # --- Tabelle 2: Icons ---
-    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt; margin-top:10px;">',
-    "<tr>",
-    '<td style="width:30px;"><img src="', icon_mail, '" style="height:14px; vertical-align:middle;"></td>',
-    '<td><a href="mailto:dlznn@eeg-energie.de">dlznn@eeg-energie.de</a></td>',
-    "</tr>",
-    "<tr>",
-    '<td style="width:30px;"><img src="', icon_www, '" style="height:14px; vertical-align:middle;"></td>',
-    '<td><a href="http://www.eeg-energie.de">www.eeg-energie.de</a></td>',
-    "</tr>",
-    "<tr>",
-    '<td style="width:30px;"><img src="', icon_address, '" style="height:14px; vertical-align:middle;"></td>',
-    '<td><a href="https://www.google.com/maps/...">Margarete-Steiff-Str. 1-3, 24558 Henstedt-Ulzburg</a></td>',
-    "</tr>",
-    "</table>",
-    
-    # --- Tabelle 3: Slogan + rechtlicher Hinweis ---
-    '<table style="border-collapse:collapse; font-family:Arial, sans-serif; font-size:10pt; margin-top:10px;">',
-    
-    # Zeile 1: Slogan + Icon mit Abstand
-    "<tr>",
-    "<td><b>Wir sind DER Ansprechpartner – Rund um das Thema Energie!</b></td>",
-    '<td style="width:40px; text-align:right; padding-left:18px;">',
-    '<img src="', icon_leuchtturm, '" style="height:24px;">',
-    "</td>",
-    "</tr>",
-    
-    # Zeile 2: Rechtlicher Hinweis
-    '<tr><td colspan="2" style="font-size:8pt; color:#AEAAAA;">',
-    "Sitz: Henstedt-Ulzburg, Amtsgericht Kiel HRB 20927KI<br>",
-    "Geschäftsführung: Marc Wiederhold (Sprecher) und Matthias Ewert",
-    "</td></tr>",
-    
-    #  Zeile 3: Social Icons mit Abstand
-    '<tr><td colspan="2" style="padding-top:10px;">',
-    '<table style="border-collapse:collapse;">',
-    '<tr style="vertical-align:middle;">',
-    '<td style="vertical-align:middle;">',
-    '<a href="https://www.linkedin.com/company/eeg-energie">',
-    '<img src="', icon_linkedin, '" style="height:25px; vertical-align:middle;"></a>',
-    '</td>',
-    '<td style="width:32px;"></td>',
-    '<td style="vertical-align:middle;">',
-    '<a href="https://www.xing.com/pages/eegenergie-einkaufs-undservicegmbh">',
-    '<img src="', icon_xing, '" style="height:25px; vertical-align:middle;"></a>',
-    '</td>',
-    '<td style="width:32px;"></td>',
-    '<td style="vertical-align:middle;">',
-    '<a href="https://www.instagram.com/eeg.energie/">',
-    '<img src="', icon_instagram, '" style="height:25px; vertical-align:middle;"></a>',
     '</td>',
     '</tr>',
-    '</table>',
-    '</td></tr>'
+    
+    # Zeile 2 – leer oder nutzbar
+    '<tr style="height:18px;"><td></td></tr>',
+    
+    # Zeile 3 – E-Mail
+    '<tr>',
+    '<td><b>E-Mail:</b> <a href="mailto:dlznn@eeg-energie.de">dlznn@eeg-energie.de</a></td>',
+    '<td></td>',
+    '</tr>',
+    
+    # Zeile 4 – Web
+    '<tr>',
+    '<td><b>Web:</b> <a href="http://www.eeg-energie.de">www.eeg-energie.de</a></td>',
+    '<td></td>',
+    '</tr>',
+    
+    # Zeile 5 – leer oder nutzbar
+    '<tr style="height:14px;"><td></td></tr>',
+    
+    # Zeile 6 – Firmenname
+    '<tr>',
+    '<td style="font-family:Arial, sans-serif; font-size:10pt; font-weight:bold;">EEG Energie- Einkaufs- und Service GmbH</td>',
+    '<td></td>',
+    '</tr>',
+    
+    # Zeile 7 – Slogan
+    '<tr>',
+    '<td style="font-family:Arial, sans-serif; font-size:10pt;">Wir sind DER Ansprechpartner rund um das Thema Energie!</td>',
+    '<td></td>',
+    '</tr>',
+    
+    # Zeile 8 – leer oder nutzbar
+    '<tr style="height:14px;"><td></td></tr>',
+    
+    # Zeile 9 – Social Media Icons (inline)
+    '<tr><td>',
+    '<a href="https://www.linkedin.com/company/eeg-energie">',
+    '<img src="', icon_linkedin, '" style="height:20px; vertical-align:middle;">',
+    '</a>',
+    '&nbsp;&nbsp;',
+    '<a href="https://www.xing.com/pages/eegenergie-einkaufs-undservicegmbh">',
+    '<img src="', icon_xing, '" style="height:20px; vertical-align:middle;">',
+    '</a>',
+    '&nbsp;&nbsp;',
+    '<a href="https://www.instagram.com/eeg.energie/">',
+    '<img src="', icon_instagram, '" style="height:20px; vertical-align:middle;">',
+    '</a>',
+    '</td><td></td></tr>',
+    
+    # Zeile 10 – leer oder nutzbar
+    '<tr style="height:18px;"><td></td></tr>',
+    
+    # Zeile 11 – rechtliche Infos
+    '<tr><td style="font-size:8pt; color:#AEAAAA;">',
+    'Sitz: Henstedt-Ulzburg, Amtsgericht Kiel HRB 20927KI<br>',
+    'Geschäftsführung: Marc Wiederhold (Sprecher) und Matthias Ewert',
+    '</td><td></td></tr>',
+    
+    # Zeile 12 – leer oder nutzbar
+    '<tr style="height:18px;"><td></td></tr>',
+    
+    # Zeile 13 – Datenschutz-Hinweis
+    '<tr><td colspan="2" style="font-size:8pt; color:#AEAAAA; text-align: justify;">',
+    'Wir verarbeiten Ihre Daten zur Erfüllung vertraglicher Pflichten, eines berechtigen Interesses, aufgrund bestehender Einwilligung oder aufgrund sonstiger Rechtsnormen, die die Verarbeitung erlauben. Mehr Informationen, insb. zu Ihren Rechten wie Widerspruch gegen die Datenverarbeitung, erhalten Sie in unserer Datenschutzerklärung ',
+    '<a href="https://www.eeg-energie.de/" style="color:#AEAAAA;">https://www.eeg-energie.de/</a>.',
+    'Unseren Datenschutzbeauftragten erreichen Sie unter:',
+    '<a href="mailto:DS@GETEC-net.de" style="color:#AEAAAA;">DS@GETEC-net.de</a>.',
+    '</td></tr>',
+    
+    '</table>'
   )
 }
 
